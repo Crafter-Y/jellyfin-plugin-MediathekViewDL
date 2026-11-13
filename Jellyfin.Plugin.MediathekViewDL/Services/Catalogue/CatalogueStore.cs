@@ -124,6 +124,15 @@ public sealed class CatalogueStore
             nfo.Add(new XElement("showtitle", item.Topic), new XElement("season", item.Season), new XElement("episode", item.Episode));
         }
 
+        if (item.UseSourceMetadata)
+        {
+            nfo.Add(
+                new XElement("lockdata", true),
+                new XElement("originaltitle", item.Title),
+                new XElement("studio", item.Source.Channel),
+                new XElement("runtime", (int)item.Source.Duration.TotalMinutes));
+        }
+
         foreach (var id in item.Source.ExternalIds.Where(id => id.Source is "imdb" or "tmdb" or "tvdb"))
         {
             nfo.Add(new XElement("uniqueid", new XAttribute("type", id.Source), id.Id));
@@ -141,6 +150,10 @@ public sealed class CatalogueStore
             && File.ReadAllText(path) == strm && File.ReadAllText(nfoPath) == nfo.ToString())
         {
             entry.LastSeen = now;
+            entry.SourceId = item.Source.Id;
+            entry.SourceTitle = item.Source.Title;
+            entry.SourceTopic = item.Source.Topic;
+            entry.DuplicateKey = item.DuplicateKey;
             MarkAvailable(item.Key);
             return false;
         }
@@ -152,8 +165,51 @@ public sealed class CatalogueStore
         {
             RelativePath = relative, Url = url, LinkHash = HashFile(path), NfoHash = HashFile(nfoPath),
             LastSeen = now, MissingSince = null, MissingChecks = 0,
+            MetadataGuardVersion = entry?.MetadataGuardVersion ?? 0,
+            SourceId = item.Source.Id, SourceTitle = item.Source.Title, SourceTopic = item.Source.Topic,
+            DuplicateKey = item.DuplicateKey,
         };
         AppendMutation(item.Key, State.Entries[item.Key]);
+        return true;
+    }
+
+    /// <summary>Returns an owned, unmodified link path, or null for protected/unmanaged files.</summary>
+    /// <param name="key">Managed identity.</param>
+    /// <returns>The absolute link path.</returns>
+    public string? GetOwnedPath(string key)
+        => State.Entries.TryGetValue(key, out var entry) && Unchanged(entry) ? Resolve(entry.RelativePath) : null;
+
+    /// <summary>Durably records a successful Jellyfin metadata repair.</summary>
+    /// <param name="key">Managed identity.</param>
+    public void MarkMetadataRepaired(string key)
+    {
+        State.Entries[key].MetadataGuardVersion = 2;
+        AppendMutation(key, State.Entries[key]);
+    }
+
+    /// <summary>Archives only verified owned files for a confidently identified duplicate.</summary>
+    /// <param name="key">Duplicate identity.</param>
+    /// <param name="now">Archive time.</param>
+    /// <returns>Whether the duplicate was archived.</returns>
+    public bool ArchiveDuplicate(string key, DateTimeOffset now)
+    {
+        if (!State.Entries.TryGetValue(key, out var entry) || !Unchanged(entry))
+        {
+            return false;
+        }
+
+        var directory = Path.Combine(_retiredPath, "duplicates", now.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture), key);
+        Directory.CreateDirectory(directory);
+        foreach (var path in new[] { Resolve(entry.RelativePath), Path.ChangeExtension(Resolve(entry.RelativePath), ".nfo") })
+        {
+            if (File.Exists(path))
+            {
+                File.Move(path, Path.Combine(directory, Path.GetFileName(path)), false);
+            }
+        }
+
+        State.Entries.Remove(key);
+        AppendMutation(key, null);
         return true;
     }
 

@@ -62,21 +62,48 @@ public sealed class CatalogueSyncService : IDisposable
         {
             var store = new CatalogueStore(options.RootPath, Path.Combine(Plugin.Instance!.DataFolderPath, "catalogue"));
             var now = DateTimeOffset.UtcNow;
+            var repairing = store.State.MetadataPolicyVersion < 2 && store.State.Entries.Count > 0;
             var full = !store.State.LastFullSync.HasValue || now - store.State.LastFullSync.Value >= TimeSpan.FromHours(24);
             var since = full ? (DateTimeOffset?)null : store.State.LastSync?.AddDays(-7);
-            var candidates = await DiscoverAsync(options, since, cancellationToken, progress).ConfigureAwait(false);
-            var selected = candidates.GroupBy(c => c.Key, StringComparer.Ordinal)
-                .Select(g => g.OrderByDescending(c => c.Source.GetVideoByQuality()?.Quality ?? 0).ThenByDescending(c => c.Source.Timestamp).First()).ToList();
+            var candidates = await DiscoverAsync(repairing ? options with { IncludeSeries = false } : options, repairing ? null : since, cancellationToken, progress).ConfigureAwait(false);
+            var prepared = CataloguePolicy.PrepareMovies(candidates, store.State.ContextualTopics);
+            var selected = CatalogueSelection.Select(prepared, store.State.Entries.Keys.ToHashSet(StringComparer.Ordinal), out var duplicateKeys, store.State.Entries.ToDictionary(p => p.Key, p => p.Value.Url, StringComparer.Ordinal));
             var seen = selected.Select(c => c.Key).ToHashSet(StringComparer.Ordinal);
             var written = 0;
             var processed = 0;
-            foreach (var candidate in selected)
+            var metadata = new CatalogueMetadataRepair(_library);
+            var repaired = 0;
+            foreach (var source in selected)
             {
+                var candidate = source;
                 cancellationToken.ThrowIfCancellationRequested();
                 var url = candidate.Source.GetVideoByQuality()?.Url;
+                // A newly published alias can match an older owned movie outside
+                // the incremental window. Reuse that identity instead of adding a row.
+                if (candidate.DuplicateKey is not null && !store.State.Entries.ContainsKey(candidate.Key))
+                {
+                    var anchor = store.State.Entries.FirstOrDefault(p => p.Value.DuplicateKey == candidate.DuplicateKey
+                        || (p.Value.Url == url && p.Value.RelativePath.StartsWith("Movies" + Path.DirectorySeparatorChar, StringComparison.Ordinal)));
+                    if (anchor.Value is not null)
+                    {
+                        candidate = candidate with { Key = anchor.Key };
+                    }
+                }
+
+                seen.Add(candidate.Key);
                 if (url is not null && IsAllowedStream(url) && store.Upsert(candidate, url, now))
                 {
                     written++;
+                }
+
+                if (candidate.UseSourceMetadata && store.State.Entries.TryGetValue(candidate.Key, out var entry) && entry.MetadataGuardVersion < 2)
+                {
+                    var owned = store.GetOwnedPath(candidate.Key);
+                    if (owned is not null && await metadata.RepairAsync(candidate, owned, Path.Combine(Plugin.Instance!.DataFolderPath, "catalogue", "metadata-repairs"), cancellationToken).ConfigureAwait(false))
+                    {
+                        store.MarkMetadataRepaired(candidate.Key);
+                        repaired++;
+                    }
                 }
 
                 if (++processed % 50 == 0)
@@ -86,9 +113,18 @@ public sealed class CatalogueSyncService : IDisposable
             }
 
             var retired = 0;
+            var duplicateCount = 0;
+            foreach (var key in duplicateKeys)
+            {
+                if (!seen.Contains(key) && store.ArchiveDuplicate(key, now))
+                {
+                    duplicateCount++;
+                }
+            }
+
             // Only a successfully completed FULL discovery is allowed to probe absent items.
             // Absence alone, HTTP 403/429/5xx and network failures never retire anything.
-            if (full)
+            if (full && !repairing)
             {
                 foreach (var pair in store.State.Entries.ToList())
                 {
@@ -129,14 +165,21 @@ public sealed class CatalogueSyncService : IDisposable
                 store.State.LastFullSync = now;
             }
 
-            store.State.LastSync = now;
+            store.State.MetadataPolicyVersion = 2;
+            if (!repairing)
+            {
+                store.State.LastSync = now;
+            }
+
             store.Save();
-            if (written > 0 || retired > 0)
+            if (written > 0 || retired > 0 || duplicateCount > 0)
             {
                 _library.QueueLibraryScan();
             }
 
             _logger.LogInformation("Catalogue sync completed: full={Full}, candidates={Candidates}, managed={Managed}, retired={Retired}", full, candidates.Count, written, retired);
+            _logger.LogInformation("Catalogue metadata repair completed: migration={Migration}, repaired={Repaired}", repairing, repaired);
+            _logger.LogInformation("Catalogue duplicates archived: {Duplicates}", duplicateCount);
             progress.Report(100);
         }
         finally

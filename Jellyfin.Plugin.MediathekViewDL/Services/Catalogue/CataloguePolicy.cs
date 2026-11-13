@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
@@ -61,7 +62,46 @@ public static class CataloguePolicy
             ? FormattableString.Invariant($"series|{item.Topic}|{video.SeasonNumber}|{video.EpisodeNumber}|{language}")
             : FormattableString.Invariant($"movie|{title}|{year}|{language}");
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Normalize(identity)))).ToLowerInvariant();
-        return new CatalogueCandidate(key, title, item.Topic, year, language, series ? video.SeasonNumber : null, series ? video.EpisodeNumber : null, item);
+        // Topic removal is appropriate for numbered episode names, but changes a
+        // TV film such as "Tatort: Avatar" into the unrelated movie query "Avatar".
+        // Preserve existing identities/paths while repairing the displayed metadata.
+        var completeTitle = !series ? parser.ParseVideoInfo(null, item.Title)?.Title.Trim() ?? title : title;
+        var contextualFilm = !series && !string.Equals(StripContext(completeTitle, item.Topic), completeTitle, StringComparison.Ordinal);
+        return new CatalogueCandidate(key, series ? title : completeTitle, item.Topic, year, language, series ? video.SeasonNumber : null, series ? video.EpisodeNumber : null, item, contextualFilm);
+    }
+
+    /// <summary>Normalizes broadcaster punctuation and equivalent prefix/suffix programme labels.</summary>
+    /// <param name="items">Candidates from completed discovery.</param>
+    /// <param name="knownTopics">Previously identified contextual TV-film programmes.</param>
+    /// <returns>Prepared candidates with conservative duplicate identities.</returns>
+    public static IReadOnlyList<CatalogueCandidate> PrepareMovies(IEnumerable<CatalogueCandidate> items, ISet<string> knownTopics)
+    {
+        var list = items.ToList();
+        var contextualTopics = new HashSet<string>(knownTopics, StringComparer.OrdinalIgnoreCase);
+        foreach (var item in list.Where(i => i.UseSourceMetadata))
+        {
+            knownTopics.Add(item.Topic);
+            contextualTopics.Add(item.Topic);
+        }
+
+        return list.Select(item =>
+        {
+            if (item.Season.HasValue)
+            {
+                return item;
+            }
+
+            var contextual = item.UseSourceMetadata || contextualTopics.Contains(item.Topic);
+            var core = StripContext(item.Title, item.Topic);
+            var title = contextual ? item.Topic + ": " + core : item.Title;
+            var description = NormalizeMovie(item.Source.Description);
+            // Matching names alone are insufficient: require matching plot evidence
+            // and a comparable cut length, or the exact same video URL below.
+            var evidence = description.Length >= 80 ? description[..80] : item.Source.Id;
+            var cut = Math.Round(item.Source.Duration.TotalMinutes / 5);
+            var duplicate = NormalizeMovie(title) + FormattableString.Invariant($"|{item.Year}|{item.Language}|{cut}|{evidence}");
+            return item with { Title = title, UseSourceMetadata = contextual, DuplicateKey = duplicate };
+        }).ToList();
     }
 
     /// <summary>Requires a production/type label, rather than a passing reference to a film in prose.</summary>
@@ -85,4 +125,18 @@ public static class CataloguePolicy
     }
 
     private static string Normalize(string text) => Regex.Replace(text.Normalize(NormalizationForm.FormKC).ToUpperInvariant(), @"\s+", " ").Trim();
+
+    private static string NormalizeMovie(string text) => Regex.Replace(Normalize(text), @"[^\p{L}\p{Nd}]+", " ").Trim();
+
+    private static string StripContext(string title, string topic)
+    {
+        if (string.IsNullOrWhiteSpace(topic))
+        {
+            return title;
+        }
+
+        var prefix = Regex.Match(title, @"^" + Regex.Escape(topic) + @"\s*[:–—|\-]\s*(.+)$", RegexOptions.IgnoreCase);
+        var suffix = Regex.Match(title, @"^(.+?)\s*[:–—|\-]\s*" + Regex.Escape(topic) + @"$", RegexOptions.IgnoreCase);
+        return prefix.Success ? prefix.Groups[1].Value.Trim() : suffix.Success ? suffix.Groups[1].Value.Trim() : title;
+    }
 }

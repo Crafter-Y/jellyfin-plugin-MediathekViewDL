@@ -1,8 +1,12 @@
 # 📺 Jellyfin MediathekViewDL Plugin
 
-## Automatic streaming catalogue (Crafter-Y fork, 0.8.4.1)
+## Automatic streaming catalogue (Crafter-Y fork, 0.8.4.2)
 
 This fork adds an opt-in catalogue for normal Jellyfin libraries without downloading programme videos or maintaining individual show subscriptions.
+
+Version 0.8.4.2 preserves contextual TV-film titles such as `Tatort: Avatar` and `Tiroler Blut: Am Abgrund`. These unnumbered TV films retain broadcaster metadata and are locked against movie-provider guessing; unrelated IDs, cast, ratings, trailers and artwork from the first import are backed up and cleared automatically. A one-time movie-only discovery repairs existing entries without repeating the full episode catalogue. Numbered series and ordinary films keep their normal metadata providers.
+
+Duplicate selection merges identical video URLs, or normalized title/year/language matches with matching plot evidence and comparable cut lengths. Programme prefixes/suffixes and punctuation variants are normalized. Different years, known audio languages and conflicting productions are preserved. Confirmed duplicate owned links and NFO files are archived under the private `catalogue/retired/duplicates` folder. User-edited files and videos are protected. Existing paths/identities are preferred to preserve library history.
 
 Bulk catalogue queries use exact broadcaster names, so `SR` does not inadvertently fetch `SRF`. Virtual playback uses the small upstream `/api/entries` lookup after a cache miss instead of traversing the whole subscription again (one measured response was 1,161 bytes). Catalogue file changes use a recoverable append-only journal, compacted into the full manifest at checkpoints, to avoid rewriting a large manifest for every new episode. Movie evidence must be an explicit production/type label in the description, not merely a discussion mentioning a feature film.
 
@@ -18,7 +22,7 @@ Only `.strm` links and `.nfo` metadata are written, with stable identities and b
 
 The dedicated root has an ownership marker; a private manifest lives in the plugin data directory under `catalogue`. Existing media directories, symlinks and user-edited files are protected. An item disappearing from the feed is not enough to remove it. After a successful full traversal, an absent stream must return 404/410 on at least three independent checks, over at least the configured grace period (default 72 hours). Authentication failures, rate limits, server errors, timeouts and network outages retain the item. Expired, unmodified links and their NFO files are moved to the plugin's private `catalogue/retired` directory for recovery. Videos and unrelated files are never retired. Empty library folders are left alone. To restore retired links, copy the relevant files back to their original library location; rediscovered items are automatically recreated. Do not change the root with an existing manifest: migrate the root and manifest explicitly while the task is disabled.
 
-For a manual installation, build with .NET 10 and Node.js, using `dotnet publish Jellyfin.Plugin.MediathekViewDL -c Release -p:Version=0.8.4.1 -p:AssemblyVersion=0.8.4.1 -p:FileVersion=0.8.4.1`. Back up the installed plugin and configuration, **stop Jellyfin**, then replace the three DLLs listed in `build.yaml`, preserve the plugin GUID, set the local manifest to the fork version and disable upstream automatic updates for that installation. Start Jellyfin again. Never overwrite a loaded DLL in place: on Linux, this can corrupt the running process's mapped assembly. The upstream repository listed below installs the upstream plugin, not this catalogue patch.
+For a manual installation, build with .NET 10 and Node.js, using `dotnet publish Jellyfin.Plugin.MediathekViewDL -c Release -p:Version=0.8.4.2 -p:AssemblyVersion=0.8.4.2 -p:FileVersion=0.8.4.2`. Back up the installed plugin and configuration, **stop Jellyfin**, then replace the three DLLs listed in `build.yaml`, preserve the plugin GUID, set the local manifest to the fork version and disable upstream automatic updates for that installation. Start Jellyfin again. Never overwrite a loaded DLL in place: on Linux, this can corrupt the running process's mapped assembly. The upstream repository listed below installs the upstream plugin, not this catalogue patch.
 
 **Ein leistungsstarkes Jellyfin-Plugin zum Suchen und Herunterladen von Inhalten aus den öffentlich-rechtlichen Mediatheken (ARD, ZDF, etc.).**
 

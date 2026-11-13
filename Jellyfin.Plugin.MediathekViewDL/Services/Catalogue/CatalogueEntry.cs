@@ -17,6 +17,21 @@ public sealed class CatalogueEntry
     /// <summary>Gets or sets the expected metadata hash.</summary>
     public string NfoHash { get; set; } = string.Empty;
 
+    /// <summary>Gets or sets the last metadata guard applied to the Jellyfin item.</summary>
+    public int MetadataGuardVersion { get; set; }
+
+    /// <summary>Gets or sets the original upstream identity for diagnostics.</summary>
+    public string SourceId { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the unabridged broadcaster title.</summary>
+    public string SourceTitle { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the original programme topic.</summary>
+    public string SourceTopic { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the normalized movie duplicate identity.</summary>
+    public string? DuplicateKey { get; set; }
+
     /// <summary>Gets or sets the last upstream observation.</summary>
     public DateTimeOffset LastSeen { get; set; }
 
