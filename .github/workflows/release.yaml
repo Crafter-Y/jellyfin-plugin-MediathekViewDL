@@ -22,6 +22,7 @@ permissions:
 
 jobs:
   build-and-upload:
+    if: github.repository == 'CatNoir2006/jellyfin-plugin-MediathekViewDL'
     name: 'Build & Upload to Release'
     runs-on: ubuntu-latest
     outputs:
@@ -97,6 +98,7 @@ jobs:
           retention-days: 1
 
   update-manifest:
+    if: github.repository == 'CatNoir2006/jellyfin-plugin-MediathekViewDL'
     name: 'Update Manifest File'
     needs: build-and-upload
     runs-on: ubuntu-latest

@@ -490,8 +490,12 @@ public class SubscriptionProcessor : ISubscriptionProcessor
     {
         var currentPage = 0;
         var hasMoreResults = true;
-        var pageSize = _configurationProvider.Configuration.Search.PageSize;
-        var maxPages = _configurationProvider.Configuration.Search.MaxPages;
+        var pageSize = subscription.IsVirtual
+            ? Math.Clamp(_configurationProvider.Configuration.Catalogue.PageSize, 1, 500)
+            : _configurationProvider.Configuration.Search.PageSize;
+        var maxPages = subscription.IsVirtual
+            ? Math.Clamp(_configurationProvider.Configuration.Catalogue.MaxPages, 1, 10000)
+            : _configurationProvider.Configuration.Search.MaxPages;
 
         while (hasMoreResults && currentPage < maxPages)
         {
@@ -510,7 +514,9 @@ public class SubscriptionProcessor : ISubscriptionProcessor
             QueryResultDto result;
             try
             {
-                result = await _apiClient.SearchAsync(apiQuery, cancellationToken).ConfigureAwait(false);
+                result = subscription.IsVirtual
+                    ? await _apiClient.SearchPageAsync(apiQuery, cancellationToken).ConfigureAwait(false)
+                    : await _apiClient.SearchAsync(apiQuery, cancellationToken).ConfigureAwait(false);
             }
             catch (MediathekException ex)
             {
@@ -518,7 +524,9 @@ public class SubscriptionProcessor : ISubscriptionProcessor
                 yield break;
             }
 
-            if (result.QueryInfo.TotalResults > (currentPage + 1) * pageSize)
+            if (subscription.IsVirtual
+                ? result.QueryInfo.ResultCount >= pageSize && (result.QueryInfo.TotalRelation != TotalRelation.Equal || result.QueryInfo.TotalResults > (currentPage + 1) * pageSize)
+                : result.QueryInfo.TotalResults > (currentPage + 1) * pageSize)
             {
                 hasMoreResults = true;
                 currentPage++;

@@ -1,5 +1,23 @@
 # 📺 Jellyfin MediathekViewDL Plugin
 
+## Automatic streaming catalogue (Crafter-Y fork, 0.8.4.1)
+
+This fork adds an opt-in catalogue for normal Jellyfin libraries without downloading programme videos or maintaining individual show subscriptions.
+
+1. Open **Einstellungen → Streaming-Katalog (automatisch)**. Enable the catalogue, choose the broadcasters and set an **empty, dedicated absolute directory** on the server, for example `/media/Mediathek`.
+2. Optionally include series. Only episodes with reliable season **and** episode numbers are accepted; they are grouped by the actual programme topic, never by a broadcaster-wide subscription name.
+3. Save and run **Katalog jetzt synchronisieren**. Add `/media/Mediathek/Movies` as a Jellyfin Movies library and `/media/Mediathek/Shows` as a Shows library. Keep normal movie/TV metadata and artwork providers enabled, but disable trickplay generation and video thumbnail extraction for these streaming libraries.
+
+The scheduled task runs every six hours. It performs a complete broadcaster traversal initially and at least daily; intermediate runs overlap seven days of broadcast dates. Page size and page guard are independent of interactive search limits. Changing snapshots, failed pages and page-guard exhaustion fail the task without committing its checkpoint or retiring links. Broad virtual subscriptions use the catalogue pagination limits too, with playback re-resolution after cache eviction or restart.
+
+Movie selection is deliberately conservative: a long video with no episode number is **not** automatically a film. Positive fiction evidence is required; trailers, factual programmes, documentaries and ambiguous records are skipped. This is a useful subset of MediathekView's indexed content, not a complete mirror of every broadcaster website. Unnumbered series and perfect classification are future work. Production years are extracted only when provided; broadcast years are never substituted. NFO files preserve broadcaster descriptions and known external IDs. Jellyfin's configured providers supply posters and external metadata where a match is available; perfect IMDb/TMDB identification is not guaranteed.
+
+Only `.strm` links and `.nfo` metadata are written, with stable identities and broadcaster/quality duplicate selection. No programme video, subtitle or trickplay files are downloaded by the catalogue. Links are direct broadcaster URLs: playback remains subject to regional restrictions, availability and client compatibility. Live TV remains independently provided by the existing Zapp integration.
+
+The dedicated root has an ownership marker; a private manifest lives in the plugin data directory under `catalogue`. Existing media directories, symlinks and user-edited files are protected. An item disappearing from the feed is not enough to remove it. After a successful full traversal, an absent stream must return 404/410 on at least three independent checks, over at least the configured grace period (default 72 hours). Authentication failures, rate limits, server errors, timeouts and network outages retain the item. Expired, unmodified links and their NFO files are moved to the plugin's private `catalogue/retired` directory for recovery. Videos and unrelated files are never retired. Empty library folders are left alone. To restore retired links, copy the relevant files back to their original library location; rediscovered items are automatically recreated. Do not change the root with an existing manifest: migrate the root and manifest explicitly while the task is disabled.
+
+For a manual installation, build with .NET 10 and Node.js, using `dotnet publish Jellyfin.Plugin.MediathekViewDL -c Release -p:Version=0.8.4.1 -p:AssemblyVersion=0.8.4.1 -p:FileVersion=0.8.4.1`. Back up the installed plugin and configuration, then replace the three DLLs listed in `build.yaml`, preserve the plugin GUID, set the local manifest to the fork version and disable upstream automatic updates for that installation. Restart Jellyfin. The upstream repository listed below installs the upstream plugin, not this catalogue patch.
+
 **Ein leistungsstarkes Jellyfin-Plugin zum Suchen und Herunterladen von Inhalten aus den öffentlich-rechtlichen Mediatheken (ARD, ZDF, etc.).**
 
 Dieses Plugin integriert die [MediathekViewWeb-API](https://mediathekviewweb.de/) direkt in Jellyfin. Es ermöglicht das automatische Abonnieren von Sendungen, das intelligente Verwalten von Downloads und die nahtlose Integration in Ihre Medienbibliothek.

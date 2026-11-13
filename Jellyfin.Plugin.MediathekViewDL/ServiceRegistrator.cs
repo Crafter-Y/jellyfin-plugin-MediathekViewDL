@@ -5,6 +5,7 @@ using Jellyfin.Plugin.MediathekViewDL.Channels;
 using Jellyfin.Plugin.MediathekViewDL.Configuration;
 using Jellyfin.Plugin.MediathekViewDL.Data;
 using Jellyfin.Plugin.MediathekViewDL.Services;
+using Jellyfin.Plugin.MediathekViewDL.Services.Catalogue;
 using Jellyfin.Plugin.MediathekViewDL.Services.Downloading;
 using Jellyfin.Plugin.MediathekViewDL.Services.Downloading.Clients;
 using Jellyfin.Plugin.MediathekViewDL.Services.Downloading.Handlers;
@@ -58,6 +59,7 @@ namespace Jellyfin.Plugin.MediathekViewDL
             serviceCollection.AddSingleton<IDownloadHistoryRepository, DbDownloadHistoryRepository>();
 
             serviceCollection.AddSingleton<IConfigurationProvider, PluginConfigurationProvider>();
+            serviceCollection.AddSingleton<CatalogueSyncService>();
             serviceCollection.AddSingleton<IQueryParser, QueryParser>();
             serviceCollection.AddSingleton<ILanguageDetectionService, LanguageDetectionService>();
             serviceCollection.AddSingleton<IVideoParser, VideoParser>();

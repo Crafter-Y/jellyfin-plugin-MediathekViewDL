@@ -22,6 +22,39 @@ namespace Jellyfin.Plugin.MediathekViewDL.Tests
     public class MediathekViewApiClientTests
     {
         [Fact]
+        public async Task SearchPageAsync_ShouldKeepRawCount_WithoutFillingFilteredPagesOrProbingSizes()
+        {
+            // Arrange
+            var handler = new Mock<HttpMessageHandler>();
+            var response = new ApiResult
+            {
+                Result = new ResultChannels
+                {
+                    QueryInfo = new QueryInfo { ResultCount = 1, TotalResults = 20000, TotalRelation = "gte" },
+                    Results = new Collection<ResultItem>
+                    {
+                        new() { Id = "one", Title = "Excluded", Topic = "Topic", Channel = "ARD", Description = "Plot", UrlVideo = "https://example.ard.de/film.mp4", Timestamp = 1700000000, Duration = 3600 },
+                    },
+                },
+            };
+            handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(response)) });
+            var client = new MediathekViewApiClient(new HttpClient(handler.Object), Mock.Of<ILogger<MediathekViewApiClient>>(),
+                new TestOptionsMonitor(new MediathekViewApiClientOptions { MaxSearchPages = 5, FetchStreamSizes = true }));
+            // Act
+            var result = await client.SearchPageAsync(new ApiQueryDto
+            {
+                Size = 1,
+                Queries = [new QueryFieldsDto { Fields = [QueryFieldType.Title], Query = "Excluded", IsExclude = true }],
+            }, CancellationToken.None);
+            // Assert
+            Assert.Empty(result.Results);
+            Assert.Equal(1, result.QueryInfo.ResultCount);
+            Assert.Equal(TotalRelation.GreaterThan, result.QueryInfo.TotalRelation);
+            handler.Protected().Verify("SendAsync", Times.Once(), ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+        }
+
+        [Fact]
         public async Task SearchAsync_ShouldRetry_WhenApiReturns500()
         {
             // Arrange

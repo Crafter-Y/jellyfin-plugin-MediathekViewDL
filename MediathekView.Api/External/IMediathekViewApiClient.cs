@@ -20,6 +20,12 @@ public interface IMediathekViewApiClient
     /// <exception cref="MediathekView.Api.Exceptions.MediathekException">Thrown when an error occurs while calling the API.</exception>
     Task<QueryResultDto> SearchAsync(ApiQueryDto apiQueryDto, CancellationToken cancellationToken);
 
+    /// <summary>Retrieves exactly one upstream page without stream-size probes or automatic page filling.</summary>
+    /// <param name="apiQueryDto">The page query.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A page with the original upstream result count.</returns>
+    Task<QueryResultDto> SearchPageAsync(ApiQueryDto apiQueryDto, CancellationToken cancellationToken);
+
     /// <summary>
     /// Validates the given or configured MediathekViewWeb server URL by calling its stats health endpoint.
     /// The server must respond with status code 200 and the body "Server is up and running".

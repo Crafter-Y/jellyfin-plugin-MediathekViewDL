@@ -165,8 +165,33 @@ public class MediathekChannel : IChannel, IRequiresMediaInfoCallback, IDisposabl
     {
         if (!TryGetCache(id, out var entry))
         {
-            _logger.LogWarning("No (longer) cached item found for channel item '{Id}'.", id);
-            return [];
+            // Jellyfin can retain a listing longer than this bounded cache, including
+            // across server restarts. Re-resolve the stable source ID instead of
+            // requiring users to browse the parent folder again.
+            var subscriptionId = id.StartsWith(ItemPrefix, StringComparison.Ordinal) && id.Length > ItemPrefix.Length + 33
+                ? id.Substring(ItemPrefix.Length, 32) : string.Empty;
+            var subscription = _configurationProvider.Configuration.Subscriptions.FirstOrDefault(s =>
+                s.IsEnabled && s.IsVirtual && s.Id.ToString("N", System.Globalization.CultureInfo.InvariantCulture) == subscriptionId);
+            if (subscription is null)
+            {
+                return [];
+            }
+
+            await foreach (var (item, _) in _subscriptionProcessor.GetChannelItemsAsync(subscription, cancellationToken).ConfigureAwait(false))
+            {
+                if (id == ItemPrefix + subscriptionId + "-" + item.Id)
+                {
+                    entry = new ApiResultCacheEntry(subscription, item, DateTimeOffset.UtcNow);
+                    _memoryCache.Set(id, entry, _defaultCacheOptions);
+                    break;
+                }
+            }
+
+            if (entry.Item is null)
+            {
+                _logger.LogWarning("Channel item '{Id}' is no longer in the upstream catalogue.", id);
+                return [];
+            }
         }
 
         var url = await _subscriptionProcessor.GetStreamUrlAsync(entry.Subscription, entry.Item, cancellationToken).ConfigureAwait(false);

@@ -25,6 +25,9 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     public int ConfigVersion { get; set; }
 
+    /// <summary>Gets or sets automatic streaming catalogue options.</summary>
+    public CatalogueOptions Catalogue { get; set; } = new();
+
     /// <summary>
     /// Gets or sets the configuration paths.
     /// Contains the paths for the different download types.

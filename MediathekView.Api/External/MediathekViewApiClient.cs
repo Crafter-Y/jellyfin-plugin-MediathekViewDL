@@ -189,9 +189,14 @@ public class MediathekViewApiClient : IMediathekViewApiClient
         };
     }
 
+    /// <inheritdoc />
+    public Task<QueryResultDto> SearchPageAsync(ApiQueryDto apiQueryDto, CancellationToken cancellationToken)
+        => PerformSearchInternalAsync(apiQueryDto, cancellationToken, fetchStreamSizes: false);
+
     private async Task<QueryResultDto> PerformSearchInternalAsync(
         ApiQueryDto apiQueryDto,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool fetchStreamSizes = true)
     {
         try
         {
@@ -226,7 +231,7 @@ public class MediathekViewApiClient : IMediathekViewApiClient
             // Filter results locally based on exclusion criteria
             dto = FilterResults(dto, apiQueryDto);
 
-            if (_optionsMonitor.CurrentValue.FetchStreamSizes)
+            if (fetchStreamSizes && _optionsMonitor.CurrentValue.FetchStreamSizes)
             {
                 var newResults = new List<ResultItemDto>();
                 foreach (var item in dto.Results)

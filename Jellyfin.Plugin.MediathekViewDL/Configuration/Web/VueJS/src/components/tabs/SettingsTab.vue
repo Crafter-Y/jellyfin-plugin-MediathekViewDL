@@ -12,6 +12,24 @@ const emit = defineEmits(['config-saved'])
 const loading = ref(false)
 const saving = ref(false)
 const lastRun = ref(null)
+const catalogue = ref({ Enabled: false, RootPath: '', Channels: 'ARD,ZDF,3Sat,ARTE.DE,BR,HR,MDR,NDR,RBB,SR,SWR,WDR,ZDFneo,ZDFinfo,ONE,ARD-alpha', IncludeSeries: false, PageSize: 500, MaxPages: 2000, RetirementGraceHours: 72 })
+const catalogueStarting = ref(false)
+
+async function startCatalogue() {
+  catalogueStarting.value = true
+  try {
+    if (!(await saveConfig())) return
+    const tasks = await ApiService.getScheduledTasks()
+    const task = tasks.find(t => t.Key === 'MediathekAutomaticCatalogue')
+    if (!task) throw new Error('Synchronisationsaufgabe nicht gefunden. Jellyfin nach dem Update neu starten.')
+    await ApiService.startScheduledTask(task.Id)
+    Dashboard?.alert('Synchronisation gestartet. Fortschritt unter Übersicht → Geplante Aufgaben.')
+  } catch (e) {
+    Dashboard?.alert(e.message || 'Synchronisation konnte nicht gestartet werden.')
+  } finally {
+    catalogueStarting.value = false
+  }
+}
 
 // Paths
 const useTopicForMoviePath = ref(false)
@@ -129,6 +147,8 @@ async function loadConfig() {
       ? (config.Download.MinFreeDiskSpaceBytes / (1024 * 1024)).toString()
       : ''
 
+    catalogue.value = { ...catalogue.value, ...(config.Catalogue ?? {}) }
+
     // Search
     fetchStreamSizes.value = config.Search?.FetchStreamSizes ?? false
     searchInFutureBroadcasts.value = config.Search?.SearchInFutureBroadcasts ?? false
@@ -214,6 +234,8 @@ async function saveConfig() {
     const minFree = parseInt(minFreeDiskSpaceMiB.value)
     config.Download.MinFreeDiskSpaceBytes = isNaN(minFree) ? (1.5 * 1024 * 1024 * 1024) : (minFree * 1024 * 1024)
 
+    config.Catalogue = { ...catalogue.value }
+
     // Search
     if (!config.Search) config.Search = {}
     config.Search.FetchStreamSizes = fetchStreamSizes.value
@@ -284,9 +306,11 @@ async function saveConfig() {
      if (Dashboard) Dashboard.alert('Einstellungen gespeichert.')
      // Notify parent to refresh config
      emit('config-saved')
+     return true
   } catch (e) {
     console.error('Failed to save config', e)
     if (Dashboard) Dashboard.alert('Fehler beim Speichern der Einstellungen.')
+    return false
   } finally {
     saving.value = false
   }
@@ -424,6 +448,36 @@ onMounted(() => {
       <details hidden class="settings-section">
         <summary class="section-title">Allgemeine Einstellungen</summary>
         <div class="section-body"></div>
+      </details>
+
+      <details class="settings-section" open>
+        <summary class="section-title">Streaming-Katalog (automatisch)</summary>
+        <div class="section-body">
+          <label><input v-model="catalogue.Enabled" type="checkbox"> Automatischen Streaming-Katalog aktivieren</label>
+          <p class="field-desc">Erstellt eine durchsuchbare Jellyfin-Bibliothek aus Streaming-Links. Videos bleiben beim Sender. Keine einzelnen Sendungs-Abos erforderlich.</p>
+          <div class="field">
+            <label class="field-label">Eigener Katalog-Ordner</label>
+            <input v-model="catalogue.RootPath" class="field-input" placeholder="Absoluter Pfad zu einem neuen, leeren Ordner">
+            <p class="field-desc">Einen eigenen leeren Ordner verwenden. Anschließend die Unterordner Movies und Shows als Filme- bzw. Serienbibliothek in Jellyfin hinzufügen. Bestehende Medienordner werden nicht übernommen.</p>
+          </div>
+          <div class="field">
+            <label class="field-label">Sender (durch Komma getrennt)</label>
+            <input v-model="catalogue.Channels" class="field-input">
+          </div>
+          <label><input v-model="catalogue.IncludeSeries" type="checkbox"> Auch eindeutig nummerierte Serien importieren</label>
+          <p class="field-desc">Filme werden anhand eindeutiger Spielfilm-/Fernsehfilm-Angaben ausgewählt. Unklare Beiträge, Trailer und Nachrichtensendungen werden ausgelassen. Serien werden nach ihrem tatsächlichen Namen gruppiert.</p>
+          <div class="field">
+            <label class="field-label">Schonfrist für abgelaufene Links (Stunden)</label>
+            <input v-model.number="catalogue.RetirementGraceHours" type="number" class="field-input" min="24">
+            <p class="field-desc">Nur wiederholte 404/410-Antworten nach vollständiger Katalogprüfung führen zur Archivierung. Netzfehler und unvollständige Abfragen entfernen keine Einträge. Benutzeränderungen bleiben erhalten.</p>
+          </div>
+          <div class="field">
+            <label class="field-label">Maximale Katalogseiten pro Sender</label>
+            <input v-model.number="catalogue.MaxPages" type="number" class="field-input" min="1" max="10000">
+            <p class="field-desc">Unabhängig vom Suchlimit der Abos. Wird die Grenze erreicht, bleibt der alte Stand erhalten. Automatisch alle 6 Stunden; täglicher Vollabgleich.</p>
+          </div>
+          <button type="button" class="btn btn-secondary" :disabled="catalogueStarting || !catalogue.Enabled || !catalogue.RootPath" @click="startCatalogue">{{ catalogueStarting ? 'Wird gestartet…' : 'Katalog jetzt synchronisieren' }}</button>
+        </div>
       </details>
 
       <!-- ===== PFADE ===== -->
