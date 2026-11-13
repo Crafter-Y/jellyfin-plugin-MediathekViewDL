@@ -1,0 +1,54 @@
+name: Catalogue fork checks and package
+
+on:
+  push:
+    branches: [master, feat/automatic-streaming-catalogue]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'Crafter-Y/jellyfin-plugin-MediathekViewDL'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: Jellyfin.Plugin.MediathekViewDL/Configuration/Web/VueJS/package-lock.json
+      - name: Build and test
+        run: |
+          dotnet build Jellyfin.Plugin.MediathekViewDL.sln -c Release -p:Version=0.8.4.1 -p:AssemblyVersion=0.8.4.1 -p:FileVersion=0.8.4.1
+          dotnet test Jellyfin.Plugin.MediathekViewDL.sln -c Release --no-build
+          npm test --prefix Jellyfin.Plugin.MediathekViewDL/Configuration/Web/VueJS
+      - name: Package plugin assemblies
+        run: |
+          dotnet publish Jellyfin.Plugin.MediathekViewDL -c Release --no-build -p:Version=0.8.4.1 -p:AssemblyVersion=0.8.4.1 -p:FileVersion=0.8.4.1 -o publish
+          mkdir package
+          cp publish/Jellyfin.Plugin.MediathekViewDL.dll publish/MediathekView.Api.dll publish/FuzzySharp.dll package/
+          python3 - <<'PY'
+          import datetime, json
+          manifest = {
+              "category": "General", "name": "Mediathek Downloader",
+              "guid": "a31b415a-5264-419d-b152-8c8192a54994",
+              "version": "0.8.4.1", "targetAbi": "12.0.0.0",
+              "owner": "Crafter-Y (fork of CatNoir2006)",
+              "description": "Automatic streaming catalogue fork",
+              "overview": "Automatic streaming catalogue fork",
+              "changelog": "Automatic movies, numbered series and safe catalogue synchronization.",
+              "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "status": "Active", "autoUpdate": False, "assemblies": []
+          }
+          with open("package/meta.json", "w") as output:
+              json.dump(manifest, output, indent=2)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MediathekViewDL-0.8.4.1
+          path: package/*
