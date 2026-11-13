@@ -1,7 +1,9 @@
+using Jellyfin.Plugin.MediathekViewDL.Channels;
 using Jellyfin.Plugin.MediathekViewDL.Configuration;
 using Jellyfin.Plugin.MediathekViewDL.Configuration.Groups;
 using Jellyfin.Plugin.MediathekViewDL.Services.Catalogue;
 using Jellyfin.Plugin.MediathekViewDL.Services.Media;
+using Jellyfin.Plugin.MediathekViewDL.Services.Subscriptions;
 using MediaBrowser.Controller.Library;
 using MediathekView.Api.External;
 using MediathekView.Api.Models;
@@ -27,6 +29,9 @@ public class CatalogueTests : IDisposable
     [InlineData("Interview", "Spielfilm Deutschland 2020", false, null)]
     [InlineData("Doku", "Spielfilm Deutschland 2020", false, null)]
     [InlineData("Episode (S01/E02)", "Fernsehserie Deutschland 2020", false, null)]
+    [InlineData("Die Klimakrise", "Im Anschluss an den Spielfilm diskutieren die Gäste den Klimawandel.", false, null)]
+    [InlineData("Freunde durch dick und dünn", "Zwei Schauspieler erzählen vom neuen Kinofilm.", false, null)]
+    [InlineData("Oktoberfestattentat", "Ein Journalist recherchiert. Dann kam die Idee mit dem Spielfilm.", false, null)]
     public void Classify_ShouldRequirePositiveFilmEvidence(string title, string description, bool expected, int? year)
     {
         // Arrange
@@ -146,6 +151,62 @@ public class CatalogueTests : IDisposable
         Assert.Equal("user metadata", File.ReadAllText(Path.ChangeExtension(path, ".nfo")));
     }
 
+    [Fact]
+    public void Store_ShouldRecoverJournal_AndIgnoreOnlyAnIncompleteFinalAppend()
+    {
+        // Arrange
+        var root = Path.Combine(_temp, "library");
+        var data = Path.Combine(_temp, "state");
+        var item = CataloguePolicy.Classify(Item("A film", "Spielfilm Deutschland 1998"), _parser, false)!;
+        var store = new CatalogueStore(root, data);
+        store.Upsert(item, "https://example.ard.de/film.mp4", DateTimeOffset.UtcNow);
+        File.AppendAllText(Path.Combine(data, "catalogue-journal.jsonl"), "{\"Generation\":");
+        // Act
+        var recovered = new CatalogueStore(root, data);
+        // Assert
+        Assert.Equal("https://example.ard.de/film.mp4", recovered.State.Entries[item.Key].Url);
+        Assert.Null(recovered.State.LastFullSync);
+        Assert.Empty(File.ReadAllText(Path.Combine(data, "catalogue-journal.jsonl")));
+    }
+
+    [Fact]
+    public void Store_ShouldNotReplayOldGeneration_AfterManifestCommit()
+    {
+        // Arrange
+        var root = Path.Combine(_temp, "library");
+        var data = Path.Combine(_temp, "state");
+        var item = CataloguePolicy.Classify(Item("A film", "Spielfilm Deutschland 1998"), _parser, false)!;
+        var store = new CatalogueStore(root, data);
+        store.Upsert(item, "https://example.ard.de/old.mp4", DateTimeOffset.UtcNow);
+        var journal = Path.Combine(data, "catalogue-journal.jsonl");
+        var oldJournal = File.ReadAllText(journal);
+        store.Upsert(item, "https://example.ard.de/new.mp4", DateTimeOffset.UtcNow);
+        store.Save();
+        // Act: simulate a crash after the manifest commit but before clearing the journal.
+        File.WriteAllText(journal, oldJournal);
+        var recovered = new CatalogueStore(root, data);
+        // Assert
+        Assert.Equal("https://example.ard.de/new.mp4", recovered.State.Entries[item.Key].Url);
+    }
+
+    [Fact]
+    public void Store_ShouldReclaimExactOwnedFiles_AfterAnInterruptedJournalAppend()
+    {
+        // Arrange
+        var root = Path.Combine(_temp, "library");
+        var data = Path.Combine(_temp, "state");
+        var item = CataloguePolicy.Classify(Item("A film", "Spielfilm Deutschland 1998"), _parser, false)!;
+        var store = new CatalogueStore(root, data);
+        store.Upsert(item, "https://example.ard.de/film.mp4", DateTimeOffset.UtcNow);
+        File.WriteAllText(Path.Combine(data, "catalogue-journal.jsonl"), "{\"Generation\":");
+        // Act
+        var recovered = new CatalogueStore(root, data);
+        var adopted = recovered.Upsert(item, "https://example.ard.de/film.mp4", DateTimeOffset.UtcNow);
+        // Assert
+        Assert.True(adopted);
+        Assert.Single(recovered.State.Entries);
+    }
+
     [Theory]
     [InlineData(false, true, false)]
     [InlineData(false, false, true)]
@@ -153,6 +214,7 @@ public class CatalogueTests : IDisposable
     {
         // Arrange
         var api = new Mock<IMediathekViewApiClient>();
+        api.Setup(a => a.GetChannelsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { "ARD" });
         var configuration = new Mock<IConfigurationProvider>();
         configuration.SetupGet(c => c.Configuration).Returns(new PluginConfiguration());
         var now = DateTimeOffset.UtcNow;
@@ -195,6 +257,7 @@ public class CatalogueTests : IDisposable
     {
         // Arrange
         var api = new Mock<IMediathekViewApiClient>();
+        api.Setup(a => a.GetChannelsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { "ARD" });
         var durations = new[] { 600, 2398, 2399, 2400, 4198, 4199, 4200, 6000 };
         var calls = new List<ApiQueryDto>();
         api.Setup(a => a.SearchPageAsync(It.IsAny<ApiQueryDto>(), It.IsAny<CancellationToken>()))
@@ -231,6 +294,7 @@ public class CatalogueTests : IDisposable
     {
         // Arrange
         var api = new Mock<IMediathekViewApiClient>();
+        api.Setup(a => a.GetChannelsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { "ARD" });
         var configuration = new Mock<IConfigurationProvider>();
         configuration.SetupGet(c => c.Configuration).Returns(new PluginConfiguration());
         var offsets = new List<int>();
@@ -265,6 +329,29 @@ public class CatalogueTests : IDisposable
         }
 
         Assert.Equal(new[] { 0, 1 }, offsets);
+    }
+
+    [Fact]
+    public async Task VirtualPlayback_ShouldResolveOneSource_AfterRestartWithoutReloadingCatalogue()
+    {
+        // Arrange
+        var subscription = new Subscription { IsVirtual = true, Name = "ARD" };
+        var config = new PluginConfiguration();
+        config.Subscriptions.Add(subscription);
+        var configuration = new Mock<IConfigurationProvider>();
+        configuration.SetupGet(c => c.Configuration).Returns(config);
+        configuration.SetupGet(c => c.ConfigurationOrNull).Returns(config);
+        var processor = new Mock<ISubscriptionProcessor>();
+        var item = Item("A film", "Spielfilm Deutschland 1998");
+        processor.Setup(p => p.GetChannelSourceAsync(item.Id, It.IsAny<CancellationToken>())).ReturnsAsync(item);
+        processor.Setup(p => p.GetStreamUrlAsync(subscription, item, It.IsAny<CancellationToken>())).ReturnsAsync("https://example.ard.de/film.mp4");
+        using var channel = new MediathekChannel(NullLogger<MediathekChannel>.Instance, configuration.Object, processor.Object);
+        // Act
+        var result = (await channel.GetChannelItemMediaInfo("vitem:" + subscription.Id.ToString("N") + "-" + item.Id, CancellationToken.None)).ToList();
+        // Assert
+        Assert.Equal("https://example.ard.de/film.mp4", Assert.Single(result).Path);
+        processor.Verify(p => p.GetChannelSourceAsync(item.Id, It.IsAny<CancellationToken>()), Times.Once);
+        processor.Verify(p => p.GetChannelItemsAsync(It.IsAny<Subscription>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     private static ResultItemDto Item(string title, string description) => new()

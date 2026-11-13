@@ -45,8 +45,8 @@ public static class CataloguePolicy
         {
             // No numbering is not proof of a movie. Require positive fiction evidence,
             // and reject clips, factual programmes and documentaries conservatively.
-            var excluded = Regex.IsMatch(item.Topic + " " + title, @"\b(?:Trailer|Interview|Making.of|Nachrichten|Tagesschau|Magazin|Reportage|Dokumentation|Doku|Sportschau)\b", RegexOptions.IgnoreCase);
-            var fiction = Regex.IsMatch(description, @"\b(?:Spielfilm|Fernsehfilm|Filmkom[oö]die|Liebesfilm|Kriminalfilm|Science.Fiction.Film|Kinofilm)\b", RegexOptions.IgnoreCase);
+            var excluded = Regex.IsMatch(item.Topic + " " + title, @"\b(?:Trailer|Interview|Making.of|Nachrichten|Tagesschau|Magazin|Reportage|Dokumentation|Dokumentarfilm|Doku|Sportschau)\b", RegexOptions.IgnoreCase);
+            var fiction = HasFilmEvidence(description);
             if (excluded || !fiction || item.Duration < TimeSpan.FromMinutes(50))
             {
                 return null;
@@ -63,6 +63,12 @@ public static class CataloguePolicy
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Normalize(identity)))).ToLowerInvariant();
         return new CatalogueCandidate(key, title, item.Topic, year, language, series ? video.SeasonNumber : null, series ? video.EpisodeNumber : null, item);
     }
+
+    /// <summary>Requires a production/type label, rather than a passing reference to a film in prose.</summary>
+    /// <param name="description">Broadcaster description.</param>
+    /// <returns>Whether a film type is explicitly labelled.</returns>
+    public static bool HasFilmEvidence(string description)
+        => Regex.IsMatch(description, @"(?:^|[\r\n|·])\s*(?:Spielfilm|Fernsehfilm|Filmkom[oö]die|Liebesfilm|Kriminalfilm|Science.Fiction.Film|Kinofilm)\b", RegexOptions.IgnoreCase);
 
     /// <summary>Creates a filesystem-safe, bounded component.</summary>
     /// <param name="name">The human readable name.</param>

@@ -295,6 +295,28 @@ public class MediathekViewApiClient : IMediathekViewApiClient
         }
     }
 
+    /// <inheritdoc />
+    public async Task<ResultItemDto?> GetEntryAsync(string id, CancellationToken cancellationToken)
+    {
+        using var content = new StringContent(JsonSerializer.Serialize(new[] { id }), Encoding.UTF8, "application/json");
+        using var response = await _resiliencePolicy.ExecuteAsync(
+            ct => _httpClient.PostAsync(BuildApiEndpoint("/entries"), content, ct), cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new MediathekApiException("Could not resolve catalogue source.", response.StatusCode);
+        }
+
+        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var result = await JsonSerializer.DeserializeAsync<ApiResult>(stream, _jsonSerializerOptions, cancellationToken).ConfigureAwait(false);
+        if (result?.Result?.Results is null)
+        {
+            throw new MediathekParsingException("Invalid catalogue source response.");
+        }
+
+        var source = result.Result.Results.FirstOrDefault();
+        return source is null ? null : source.ToDto(!_optionsMonitor.CurrentValue.AllowHttp) with { Id = id };
+    }
+
     /// <summary>
     /// Validates the given or configured MediathekViewWeb server URL by calling its stats health endpoint.
     /// The server must respond with status code 200 and the body "Server is up and running".
@@ -432,11 +454,13 @@ public class MediathekViewApiClient : IMediathekViewApiClient
                 QueryFieldType.Title => item.Title,
                 QueryFieldType.Topic => item.Topic,
                 QueryFieldType.Description => item.Description,
-                QueryFieldType.Channel => item.Channel,
+                QueryFieldType.Channel or QueryFieldType.ChannelExact => item.Channel,
                 _ => string.Empty
             };
 
-            if (valueToSearch.Contains(exclude.Query, StringComparison.OrdinalIgnoreCase))
+            if (field == QueryFieldType.ChannelExact
+                ? string.Equals(valueToSearch, exclude.Query, StringComparison.OrdinalIgnoreCase)
+                : valueToSearch.Contains(exclude.Query, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }

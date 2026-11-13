@@ -18,6 +18,7 @@ public sealed class CatalogueStore
     private const string Owner = "MediathekViewDL automatic catalogue v1";
     private readonly string _root;
     private readonly string _statePath;
+    private readonly string _journalPath;
     private readonly string _retiredPath;
 
     /// <summary>Initializes a new instance of the <see cref="CatalogueStore"/> class in a dedicated directory.</summary>
@@ -66,6 +67,7 @@ public sealed class CatalogueStore
 
         Directory.CreateDirectory(dataPath);
         _statePath = Path.Combine(dataPath, "catalogue-state.json");
+        _journalPath = Path.Combine(dataPath, "catalogue-journal.jsonl");
         _retiredPath = Path.Combine(dataPath, "retired");
         State = File.Exists(_statePath)
             ? JsonSerializer.Deserialize<CatalogueState>(File.ReadAllText(_statePath)) ?? throw new IOException("Invalid catalogue state")
@@ -74,6 +76,9 @@ public sealed class CatalogueStore
         {
             throw new IOException("Catalogue root changed. Move or reset the catalogue state explicitly before migration.");
         }
+
+        ReplayJournal();
+        Save();
     }
 
     /// <summary>Gets the last durably recorded sync state.</summary>
@@ -103,11 +108,6 @@ public sealed class CatalogueStore
             return false;
         }
 
-        if (entry is null && (File.Exists(path) || File.Exists(nfoPath)))
-        {
-            return false;
-        }
-
         var strm = url + "\n# " + Owner + " " + item.Key + "\n";
         var nfo = new XElement(
             show ? "episodedetails" : "movie",
@@ -129,6 +129,14 @@ public sealed class CatalogueStore
             nfo.Add(new XElement("uniqueid", new XAttribute("type", id.Source), id.Id));
         }
 
+        // A crash can occur after the two atomic file writes but before the journal
+        // append. Reclaim only an exact pair of our expected bytes; never an edit.
+        if (entry is null && (File.Exists(path) || File.Exists(nfoPath))
+            && (!File.Exists(path) || !File.Exists(nfoPath) || File.ReadAllText(path) != strm || File.ReadAllText(nfoPath) != nfo.ToString()))
+        {
+            return false;
+        }
+
         if (entry is not null && File.Exists(path) && File.Exists(nfoPath)
             && File.ReadAllText(path) == strm && File.ReadAllText(nfoPath) == nfo.ToString())
         {
@@ -145,7 +153,7 @@ public sealed class CatalogueStore
             RelativePath = relative, Url = url, LinkHash = HashFile(path), NfoHash = HashFile(nfoPath),
             LastSeen = now, MissingSince = null, MissingChecks = 0,
         };
-        Save();
+        AppendMutation(item.Key, State.Entries[item.Key]);
         return true;
     }
 
@@ -180,7 +188,7 @@ public sealed class CatalogueStore
             State.Entries.Remove(key);
         }
 
-        Save();
+        AppendMutation(key, retired ? null : entry);
         return retired;
     }
 
@@ -195,7 +203,54 @@ public sealed class CatalogueStore
     }
 
     /// <summary>Atomically persists the current state.</summary>
-    public void Save() => AtomicWrite(_statePath, JsonSerializer.Serialize(State));
+    public void Save()
+    {
+        // Commit the new generation before clearing the old journal. A crash between
+        // these writes cannot replay stale mutations over the committed checkpoint.
+        State.JournalGeneration = Guid.NewGuid();
+        AtomicWrite(_statePath, JsonSerializer.Serialize(State));
+        AtomicWrite(_journalPath, string.Empty);
+    }
+
+    private void AppendMutation(string key, CatalogueEntry? entry)
+        => File.AppendAllText(_journalPath, JsonSerializer.Serialize(new CatalogueMutation(State.JournalGeneration, key, entry)) + "\n", new UTF8Encoding(false));
+
+    private void ReplayJournal()
+    {
+        if (!File.Exists(_journalPath))
+        {
+            return;
+        }
+
+        var lines = File.ReadAllLines(_journalPath);
+        for (var index = 0; index < lines.Length; index++)
+        {
+            CatalogueMutation? change;
+            try
+            {
+                change = JsonSerializer.Deserialize<CatalogueMutation>(lines[index]);
+            }
+            catch (JsonException) when (index == lines.Length - 1)
+            {
+                // A process crash may leave only its final append incomplete.
+                break;
+            }
+
+            if (change is null || change.Generation != State.JournalGeneration)
+            {
+                continue;
+            }
+
+            if (change.Entry is null)
+            {
+                State.Entries.Remove(change.Key);
+            }
+            else
+            {
+                State.Entries[change.Key] = change.Entry;
+            }
+        }
+    }
 
     private bool Unchanged(CatalogueEntry entry)
     {

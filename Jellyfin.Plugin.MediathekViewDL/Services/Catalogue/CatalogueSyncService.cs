@@ -64,11 +64,12 @@ public sealed class CatalogueSyncService : IDisposable
             var now = DateTimeOffset.UtcNow;
             var full = !store.State.LastFullSync.HasValue || now - store.State.LastFullSync.Value >= TimeSpan.FromHours(24);
             var since = full ? (DateTimeOffset?)null : store.State.LastSync?.AddDays(-7);
-            var candidates = await DiscoverAsync(options, since, cancellationToken).ConfigureAwait(false);
+            var candidates = await DiscoverAsync(options, since, cancellationToken, progress).ConfigureAwait(false);
             var selected = candidates.GroupBy(c => c.Key, StringComparer.Ordinal)
                 .Select(g => g.OrderByDescending(c => c.Source.GetVideoByQuality()?.Quality ?? 0).ThenByDescending(c => c.Source.Timestamp).First()).ToList();
             var seen = selected.Select(c => c.Key).ToHashSet(StringComparer.Ordinal);
             var written = 0;
+            var processed = 0;
             foreach (var candidate in selected)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -78,7 +79,10 @@ public sealed class CatalogueSyncService : IDisposable
                     written++;
                 }
 
-                progress.Report(70.0 * written / Math.Max(1, selected.Count));
+                if (++processed % 50 == 0)
+                {
+                    progress.Report(40 + (50.0 * processed / Math.Max(1, selected.Count)));
+                }
             }
 
             var retired = 0;
@@ -145,8 +149,9 @@ public sealed class CatalogueSyncService : IDisposable
     /// <param name="options">Discovery bounds and selection.</param>
     /// <param name="since">Incremental overlap start, or null for a full snapshot.</param>
     /// <param name="cancellationToken">Cancellation.</param>
+    /// <param name="progress">Optional scheduled task progress.</param>
     /// <returns>Confidently classified candidates.</returns>
-    public async Task<List<CatalogueCandidate>> DiscoverAsync(CatalogueOptions options, DateTimeOffset? since, CancellationToken cancellationToken)
+    public async Task<List<CatalogueCandidate>> DiscoverAsync(CatalogueOptions options, DateTimeOffset? since, CancellationToken cancellationToken, IProgress<double>? progress = null)
     {
         var channels = options.Channels.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (channels.Length == 0)
@@ -156,14 +161,18 @@ public sealed class CatalogueSyncService : IDisposable
 
         var size = Math.Clamp(options.PageSize, 1, 500);
         var limit = Math.Clamp(options.MaxPages, 1, 10000);
+        var knownChannels = await _api.GetChannelsAsync(cancellationToken).ConfigureAwait(false);
+        channels = channels.Select(name => knownChannels.FirstOrDefault(known => string.Equals(known, name, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException("Unknown broadcaster: " + name)).ToArray();
         var candidates = new List<CatalogueCandidate>();
         var pager = new CataloguePager(_api);
+        var completed = 0;
         foreach (var channel in channels)
         {
             await foreach (var result in pager.GetPagesAsync(
                 new ApiQueryDto
                 {
-                    Queries = [new QueryFieldsDto { Fields = [QueryFieldType.Channel], Query = channel }],
+                    Queries = [new QueryFieldsDto { Fields = [QueryFieldType.ChannelExact], Query = channel }],
                     Size = size, MinDuration = options.IncludeSeries ? 599 : 2999, Future = true,
                 },
                 limit,
@@ -181,6 +190,7 @@ public sealed class CatalogueSyncService : IDisposable
             }
 
             _logger.LogInformation("Catalogue discovery completed for {Channel}; {Candidates} accepted records so far", channel, candidates.Count);
+            progress?.Report(40.0 * ++completed / channels.Length);
         }
 
         return candidates;

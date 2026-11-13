@@ -169,7 +169,7 @@ public class MediathekChannel : IChannel, IRequiresMediaInfoCallback, IDisposabl
             // Jellyfin can retain a listing longer than this bounded cache, including
             // across server restarts. Re-resolve the stable source ID instead of
             // requiring users to browse the parent folder again.
-            var subscriptionId = id.StartsWith(ItemPrefix, StringComparison.Ordinal) && id.Length > ItemPrefix.Length + 33
+            var subscriptionId = id.StartsWith(ItemPrefix, StringComparison.Ordinal) && id.Length > ItemPrefix.Length + 33 && id[ItemPrefix.Length + 32] == '-'
                 ? id.Substring(ItemPrefix.Length, 32) : string.Empty;
             var subscription = _configurationProvider.Configuration.Subscriptions.FirstOrDefault(s =>
                 s.IsEnabled && s.IsVirtual && s.Id.ToString("N", System.Globalization.CultureInfo.InvariantCulture) == subscriptionId);
@@ -178,14 +178,12 @@ public class MediathekChannel : IChannel, IRequiresMediaInfoCallback, IDisposabl
                 return [];
             }
 
-            await foreach (var (item, _) in _subscriptionProcessor.GetChannelItemsAsync(subscription, cancellationToken).ConfigureAwait(false))
+            var sourceId = id[(ItemPrefix.Length + 33)..];
+            var item = await _subscriptionProcessor.GetChannelSourceAsync(sourceId, cancellationToken).ConfigureAwait(false);
+            if (item is not null)
             {
-                if (id == ItemPrefix + subscriptionId + "-" + item.Id)
-                {
-                    entry = new ApiResultCacheEntry(subscription, item, DateTimeOffset.UtcNow);
-                    _memoryCache.Set(id, entry, _defaultCacheOptions);
-                    break;
-                }
+                entry = new ApiResultCacheEntry(subscription, item, DateTimeOffset.UtcNow);
+                _memoryCache.Set(id, entry, _defaultCacheOptions);
             }
 
             if (entry.Item is null)

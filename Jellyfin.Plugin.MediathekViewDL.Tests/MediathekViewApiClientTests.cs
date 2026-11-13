@@ -21,6 +21,60 @@ namespace Jellyfin.Plugin.MediathekViewDL.Tests
 {
     public class MediathekViewApiClientTests
     {
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task GetEntryAsync_ShouldResolveOneId_WithoutSearchPages(bool found)
+        {
+            // Arrange
+            var handler = new Mock<HttpMessageHandler>();
+            string? body = null;
+            string? path = null;
+            handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .Returns(async (HttpRequestMessage request, CancellationToken _) =>
+                {
+                    body = await request.Content!.ReadAsStringAsync();
+                    path = request.RequestUri!.AbsolutePath;
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(JsonSerializer.Serialize(new ApiResult
+                        {
+                            Result = new ResultChannels
+                            {
+                                Results = found ? [new ResultItem { Title = "A film", Topic = "Films", Channel = "ARD", Description = "Plot", UrlVideo = "http://example.ard.de/film.mp4" }] : [],
+                            },
+                        })),
+                    };
+                });
+            var client = new MediathekViewApiClient(new HttpClient(handler.Object), Mock.Of<ILogger<MediathekViewApiClient>>(),
+                new TestOptionsMonitor(new MediathekViewApiClientOptions()));
+            // Act
+            var result = await client.GetEntryAsync("known-id", CancellationToken.None);
+            // Assert
+            Assert.Equal("/api/entries", path);
+            Assert.Equal(new[] { "known-id" }, JsonSerializer.Deserialize<string[]>(body!));
+            Assert.Equal(found, result is not null);
+            if (found)
+            {
+                Assert.Equal("known-id", result!.Id);
+                Assert.Equal("https://example.ard.de/film.mp4", Assert.Single(result.VideoUrls).Url);
+            }
+
+            handler.Protected().Verify("SendAsync", Times.Once(), ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+        }
+
+        [Fact]
+        public void ExactChannel_ShouldUseUpstreamKeywordField()
+        {
+            // Arrange
+            var query = new QueryFieldsDto { Fields = [QueryFieldType.ChannelExact], Query = "SR" };
+            // Act
+            var model = MediathekView.Api.Converters.DtoConverter.ToModel(query);
+            // Assert
+            Assert.Equal("channel.keyword", Assert.Single(model.Fields));
+            Assert.Equal("SR", model.Query);
+        }
+
         [Fact]
         public async Task SearchPageAsync_ShouldKeepRawCount_WithoutFillingFilteredPagesOrProbingSizes()
         {

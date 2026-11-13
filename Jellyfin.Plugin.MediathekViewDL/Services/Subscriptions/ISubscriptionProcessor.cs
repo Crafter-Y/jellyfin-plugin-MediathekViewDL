@@ -13,6 +13,12 @@ namespace Jellyfin.Plugin.MediathekViewDL.Services.Subscriptions;
 /// </summary>
 public interface ISubscriptionProcessor
 {
+    /// <summary>Resolves one previously listed virtual source without reloading its catalogue.</summary>
+    /// <param name="id">Source identity.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The current source, or null if removed.</returns>
+    Task<ResultItemDto?> GetChannelSourceAsync(string id, CancellationToken cancellationToken);
+
     /// <summary>
     /// Processes a subscription to find new download jobs.
     /// </summary>

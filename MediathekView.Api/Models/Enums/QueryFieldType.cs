@@ -26,5 +26,8 @@ public enum QueryFieldType
     /// <summary>
     /// Search in channel.
     /// </summary>
-    Channel
+    Channel,
+
+    /// <summary>Search the exact broadcaster keyword, avoiding prefix matches such as SR/SRF.</summary>
+    ChannelExact
 }

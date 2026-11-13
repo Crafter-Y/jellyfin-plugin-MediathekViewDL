@@ -50,7 +50,7 @@ public static class DtoConverter
         var fields = new Collection<string>();
         foreach (var field in dto.Fields)
         {
-            fields.Add(field.ToString().ToLowerInvariant());
+            fields.Add(field == QueryFieldType.ChannelExact ? "channel.keyword" : field.ToString().ToLowerInvariant());
         }
 
         return new QueryFields { Query = dto.Query, Fields = fields };
@@ -231,7 +231,7 @@ public static class DtoConverter
     {
         if (Uri.TryCreate(uri, UriKind.Absolute, out var uriRes) && uriRes.Scheme == Uri.UriSchemeHttp)
         {
-            var builder = new UriBuilder(uriRes) { Scheme = Uri.UriSchemeHttps };
+            var builder = new UriBuilder(uriRes) { Scheme = Uri.UriSchemeHttps, Port = uriRes.IsDefaultPort ? -1 : uriRes.Port };
             return builder.ToString();
         }
 

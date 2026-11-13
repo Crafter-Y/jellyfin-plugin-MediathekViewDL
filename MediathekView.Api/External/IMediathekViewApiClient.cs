@@ -26,6 +26,12 @@ public interface IMediathekViewApiClient
     /// <returns>A page with the original upstream result count.</returns>
     Task<QueryResultDto> SearchPageAsync(ApiQueryDto apiQueryDto, CancellationToken cancellationToken);
 
+    /// <summary>Resolves one known source identity without traversing search pages.</summary>
+    /// <param name="id">Upstream source identity.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The current source record, or null when removed.</returns>
+    Task<ResultItemDto?> GetEntryAsync(string id, CancellationToken cancellationToken);
+
     /// <summary>
     /// Validates the given or configured MediathekViewWeb server URL by calling its stats health endpoint.
     /// The server must respond with status code 200 and the body "Server is up and running".

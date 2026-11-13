@@ -4,6 +4,8 @@
 
 This fork adds an opt-in catalogue for normal Jellyfin libraries without downloading programme videos or maintaining individual show subscriptions.
 
+Bulk catalogue queries use exact broadcaster names, so `SR` does not inadvertently fetch `SRF`. Virtual playback uses the small upstream `/api/entries` lookup after a cache miss instead of traversing the whole subscription again (one measured response was 1,161 bytes). Catalogue file changes use a recoverable append-only journal, compacted into the full manifest at checkpoints, to avoid rewriting a large manifest for every new episode. Movie evidence must be an explicit production/type label in the description, not merely a discussion mentioning a feature film.
+
 1. Open **Einstellungen → Streaming-Katalog (automatisch)**. Enable the catalogue, choose the broadcasters and set an **empty, dedicated absolute directory** on the server, for example `/media/Mediathek`.
 2. Optionally include series. Only episodes with reliable season **and** episode numbers are accepted; they are grouped by the actual programme topic, never by a broadcaster-wide subscription name.
 3. Save and run **Katalog jetzt synchronisieren**. Add `/media/Mediathek/Movies` as a Jellyfin Movies library and `/media/Mediathek/Shows` as a Shows library. Keep normal movie/TV metadata and artwork providers enabled, but disable trickplay generation and video thumbnail extraction for these streaming libraries.

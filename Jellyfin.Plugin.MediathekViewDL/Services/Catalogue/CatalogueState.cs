@@ -6,6 +6,9 @@ namespace Jellyfin.Plugin.MediathekViewDL.Services.Catalogue;
 /// <summary>Durable catalogue checkpoints and ownership journal.</summary>
 public sealed class CatalogueState
 {
+    /// <summary>Gets or sets the generation used for crash-safe journal compaction.</summary>
+    public Guid JournalGeneration { get; set; }
+
     /// <summary>Gets or sets the managed root.</summary>
     public string Root { get; set; } = string.Empty;
 

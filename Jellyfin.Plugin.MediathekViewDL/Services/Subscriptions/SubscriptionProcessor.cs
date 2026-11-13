@@ -153,6 +153,10 @@ public class SubscriptionProcessor : ISubscriptionProcessor
         return GetUrlCandidate(item, subscription, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public Task<ResultItemDto?> GetChannelSourceAsync(string id, CancellationToken cancellationToken)
+        => _apiClient.GetEntryAsync(id, cancellationToken);
+
     /// <summary>
     /// Returns all items matching the subscription, optionally filtering out items that were
     /// already processed according to the download history.
