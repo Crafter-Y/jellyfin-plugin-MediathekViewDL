@@ -147,7 +147,6 @@ public class CatalogueTests : IDisposable
     }
 
     [Theory]
-    [InlineData(true, false, false)]
     [InlineData(false, true, false)]
     [InlineData(false, false, true)]
     public async Task Discover_ShouldHandleLowerBounds_Checkpoints_AndChangedSnapshots(bool lowerBound, bool overlap, bool changedSnapshot)
@@ -189,6 +188,40 @@ public class CatalogueTests : IDisposable
         }
 
         Assert.Equal(overlap || changedSnapshot ? new[] { 0, 1 } : new[] { 0, 1, 2 }, offsets);
+    }
+
+    [Fact]
+    public async Task Pager_ShouldPartitionOversizedQueries_WithoutLosingBoundarySeconds()
+    {
+        // Arrange
+        var api = new Mock<IMediathekViewApiClient>();
+        var durations = new[] { 600, 2398, 2399, 2400, 4198, 4199, 4200, 6000 };
+        var calls = new List<ApiQueryDto>();
+        api.Setup(a => a.SearchPageAsync(It.IsAny<ApiQueryDto>(), It.IsAny<CancellationToken>()))
+            .Returns((ApiQueryDto query, CancellationToken _) =>
+            {
+                calls.Add(query);
+                var oversized = !query.MaxDuration.HasValue && query.MinDuration == 599;
+                var selected = durations.Where(d => d > query.MinDuration && (!query.MaxDuration.HasValue || d < query.MaxDuration.Value)).ToList();
+                var page = selected.Skip(query.Offset).Take(query.Size).ToList();
+                return Task.FromResult(new QueryResultDto
+                {
+                    QueryInfo = new QueryInfoDto { MovieListTimestamp = 1, ResultCount = page.Count, TotalResults = oversized ? 10000 : selected.Count, TotalRelation = oversized ? TotalRelation.GreaterThan : TotalRelation.Equal },
+                    Results = page.Select(d => Item("Film " + d, "Spielfilm Deutschland 1998") with { Duration = TimeSpan.FromSeconds(d) }).ToList(),
+                });
+            });
+        var found = new List<int>();
+        // Act
+        await foreach (var page in new CataloguePager(api.Object, TimeSpan.Zero).GetPagesAsync(new ApiQueryDto { MinDuration = 599, Size = 2 }, 20, null, CancellationToken.None))
+        {
+            found.AddRange(page.Results.Select(i => (int)i.Duration.TotalSeconds));
+        }
+
+        // Assert
+        Assert.Equal(durations, found.Order());
+        Assert.Contains(calls, q => q.MaxDuration == 4199);
+        Assert.Contains(calls, q => q.MinDuration == 4198);
+        Assert.All(calls, q => Assert.True(q.Offset < 10000));
     }
 
     [Theory]

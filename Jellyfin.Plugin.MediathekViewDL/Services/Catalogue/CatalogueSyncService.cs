@@ -157,26 +157,19 @@ public sealed class CatalogueSyncService : IDisposable
         var size = Math.Clamp(options.PageSize, 1, 500);
         var limit = Math.Clamp(options.MaxPages, 1, 10000);
         var candidates = new List<CatalogueCandidate>();
+        var pager = new CataloguePager(_api);
         foreach (var channel in channels)
         {
-            long? snapshot = null;
-            var complete = false;
-            for (var page = 0; page < limit; page++)
-            {
-                var result = await _api.SearchPageAsync(
-                    new ApiQueryDto
-                    {
-                        Queries = [new QueryFieldsDto { Fields = [QueryFieldType.Channel], Query = channel }],
-                        Offset = checked(page * size), Size = size, MinDuration = options.IncludeSeries ? 600 : 3000,
-                        Future = true,
-                    },
-                    cancellationToken).ConfigureAwait(false);
-                snapshot ??= result.QueryInfo.MovieListTimestamp;
-                if (snapshot != result.QueryInfo.MovieListTimestamp)
+            await foreach (var result in pager.GetPagesAsync(
+                new ApiQueryDto
                 {
-                    throw new IOException("Upstream catalogue changed during pagination; retrying next run, no removals performed.");
-                }
-
+                    Queries = [new QueryFieldsDto { Fields = [QueryFieldType.Channel], Query = channel }],
+                    Size = size, MinDuration = options.IncludeSeries ? 599 : 2999, Future = true,
+                },
+                limit,
+                since,
+                cancellationToken).ConfigureAwait(false))
+            {
                 foreach (var item in result.Results.Where(i => string.Equals(i.Channel, channel, StringComparison.OrdinalIgnoreCase)))
                 {
                     var classified = CataloguePolicy.Classify(item, _parser, options.IncludeSeries);
@@ -185,24 +178,9 @@ public sealed class CatalogueSyncService : IDisposable
                         candidates.Add(classified);
                     }
                 }
-
-                // The API has no server-side date filter. Pages are newest first: an
-                // overlap run stops only after a whole raw page precedes its checkpoint.
-                var beforeOverlap = since.HasValue && result.Results.Count > 0 && result.Results.All(i => i.Timestamp < since.Value);
-                if (beforeOverlap || result.QueryInfo.ResultCount < size
-                    || (result.QueryInfo.TotalRelation == TotalRelation.Equal && (page + 1) * size >= result.QueryInfo.TotalResults))
-                {
-                    complete = true;
-                    break;
-                }
-
-                await Task.Delay(TimeSpan.FromMilliseconds(150), cancellationToken).ConfigureAwait(false);
             }
 
-            if (!complete)
-            {
-                throw new IOException("Catalogue page guard reached; increase its limit. Snapshot/checkpoint not committed.");
-            }
+            _logger.LogInformation("Catalogue discovery completed for {Channel}; {Candidates} accepted records so far", channel, candidates.Count);
         }
 
         return candidates;

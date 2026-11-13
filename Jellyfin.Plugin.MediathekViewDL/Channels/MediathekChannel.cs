@@ -88,7 +88,7 @@ public class MediathekChannel : IChannel, IRequiresMediaInfoCallback, IDisposabl
 
             // Jellyfin caches channel listings while DataVersion stays constant. Bucketing by
             // day forces a daily refresh so newly published items appear without config changes.
-            return $"v2:{DateTime.UtcNow:yyyyMMdd}:{ids}";
+            return $"v3:{DateTime.UtcNow:yyyyMMdd}:{ids}";
         }
     }
 
@@ -163,6 +163,7 @@ public class MediathekChannel : IChannel, IRequiresMediaInfoCallback, IDisposabl
     /// <inheritdoc />
     public async Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken cancellationToken)
     {
+        InvalidateStaleCache();
         if (!TryGetCache(id, out var entry))
         {
             // Jellyfin can retain a listing longer than this bounded cache, including

@@ -29,6 +29,8 @@ public class MediathekViewApiClient : IMediathekViewApiClient
 {
     private static readonly SemaphoreSlim _channelsSemaphore = new(1, 1);
     private static readonly SemaphoreSlim _topicsSemaphore = new(1, 1);
+    private static readonly SemaphoreSlim _cataloguePageSemaphore = new(1, 1);
+    private static DateTimeOffset _nextCataloguePage;
 
     private static CacheEntry? _channelsCache;
     private static CacheEntry? _topicsCache;
@@ -190,8 +192,25 @@ public class MediathekViewApiClient : IMediathekViewApiClient
     }
 
     /// <inheritdoc />
-    public Task<QueryResultDto> SearchPageAsync(ApiQueryDto apiQueryDto, CancellationToken cancellationToken)
-        => PerformSearchInternalAsync(apiQueryDto, cancellationToken, fetchStreamSizes: false);
+    public async Task<QueryResultDto> SearchPageAsync(ApiQueryDto apiQueryDto, CancellationToken cancellationToken)
+    {
+        await _cataloguePageSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var wait = _nextCataloguePage - DateTimeOffset.UtcNow;
+            if (wait > TimeSpan.Zero)
+            {
+                await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
+            }
+
+            _nextCataloguePage = DateTimeOffset.UtcNow.AddSeconds(1);
+            return await PerformSearchInternalAsync(apiQueryDto, cancellationToken, fetchStreamSizes: false).ConfigureAwait(false);
+        }
+        finally
+        {
+            _cataloguePageSemaphore.Release();
+        }
+    }
 
     private async Task<QueryResultDto> PerformSearchInternalAsync(
         ApiQueryDto apiQueryDto,

@@ -497,26 +497,38 @@ public class SubscriptionProcessor : ISubscriptionProcessor
             ? Math.Clamp(_configurationProvider.Configuration.Catalogue.MaxPages, 1, 10000)
             : _configurationProvider.Configuration.Search.MaxPages;
 
+        var baseQuery = new ApiQueryDto
+        {
+            Queries = subscription.Search.Criteria,
+            Size = pageSize,
+            MinDuration = subscription.Search.MinDurationMinutes * 60,
+            MaxDuration = subscription.Search.MaxDurationMinutes * 60,
+            MinBroadcastDate = subscription.Search.MinBroadcastDate,
+            MaxBroadcastDate = subscription.Search.MaxBroadcastDate,
+            Future = _configurationProvider.Configuration.Search.SearchInFutureBroadcasts,
+        };
+
+        if (subscription.IsVirtual)
+        {
+            await foreach (var page in new CataloguePager(_apiClient).GetPagesAsync(baseQuery, maxPages, subscription.Search.MinBroadcastDate, cancellationToken).ConfigureAwait(false))
+            {
+                foreach (var item in page.Results)
+                {
+                    yield return item;
+                }
+            }
+
+            yield break;
+        }
+
         while (hasMoreResults && currentPage < maxPages)
         {
-            var apiQuery = new ApiQueryDto
-            {
-                Queries = subscription.Search.Criteria,
-                Size = pageSize,
-                Offset = currentPage * pageSize,
-                MinDuration = subscription.Search.MinDurationMinutes * 60,
-                MaxDuration = subscription.Search.MaxDurationMinutes * 60,
-                MinBroadcastDate = subscription.Search.MinBroadcastDate,
-                MaxBroadcastDate = subscription.Search.MaxBroadcastDate,
-                Future = _configurationProvider.Configuration.Search.SearchInFutureBroadcasts,
-            };
+            var apiQuery = baseQuery with { Offset = currentPage * pageSize };
 
             QueryResultDto result;
             try
             {
-                result = subscription.IsVirtual
-                    ? await _apiClient.SearchPageAsync(apiQuery, cancellationToken).ConfigureAwait(false)
-                    : await _apiClient.SearchAsync(apiQuery, cancellationToken).ConfigureAwait(false);
+                result = await _apiClient.SearchAsync(apiQuery, cancellationToken).ConfigureAwait(false);
             }
             catch (MediathekException ex)
             {
@@ -524,9 +536,7 @@ public class SubscriptionProcessor : ISubscriptionProcessor
                 yield break;
             }
 
-            if (subscription.IsVirtual
-                ? result.QueryInfo.ResultCount >= pageSize && (result.QueryInfo.TotalRelation != TotalRelation.Equal || result.QueryInfo.TotalResults > (currentPage + 1) * pageSize)
-                : result.QueryInfo.TotalResults > (currentPage + 1) * pageSize)
+            if (result.QueryInfo.TotalResults > (currentPage + 1) * pageSize)
             {
                 hasMoreResults = true;
                 currentPage++;
