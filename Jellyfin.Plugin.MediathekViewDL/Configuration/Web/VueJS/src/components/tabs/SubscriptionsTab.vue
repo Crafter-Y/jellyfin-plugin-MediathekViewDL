@@ -16,7 +16,7 @@ async function fetchSubscriptions() {
   loading.value = true
   error.value = null
   try {
-    subscriptions.value = await ApiService.getSubscriptions()
+    subscriptions.value = (await ApiService.getSubscriptions()).filter(s => !s.IsVirtual)
   } catch (e) {
     error.value = 'Fehler beim Laden der Abonnements.'
     console.error('Failed to fetch subscriptions', e)
@@ -79,34 +79,6 @@ async function toggleActive(sub) {
   }
 }
 
-async function triggerDownloads() {
-  if (!Dashboard) return
-  loading.value = true
-  try {
-    const tasks = await ApiService.getScheduledTasks()
-    const task = tasks.find(t => t.Key === 'MediathekViewDL-MediathekAboDownloader')
-
-    if (!task) {
-      Dashboard.alert('Scheduled Task "Mediathek Abo-Downloader" wurde nicht gefunden.')
-      return
-    }
-
-    if (task.State !== 'Idle') {
-      Dashboard.alert('Der Abo-Downloader läuft bereits.')
-      return
-    }
-
-    await ApiService.startScheduledTask(task.Id)
-
-    Dashboard.alert('Download-Task wurde gestartet.')
-  } catch (e) {
-    console.error('Failed to trigger downloads', e)
-    Dashboard.alert('Fehler beim Starten des Download-Tasks.')
-  } finally {
-    loading.value = false
-  }
-}
-
 onMounted(() => {
   fetchSubscriptions()
 })
@@ -120,7 +92,6 @@ defineExpose({ refresh: fetchSubscriptions })
     <div class="header-row">
       <h2>Abo Verwaltung</h2>
       <div class="header-actions">
-        <button class="btn btn-secondary" @click="triggerDownloads" :disabled="loading">Downloads manuell starten</button>
         <button class="btn btn-primary" @click="onEdit()" :disabled="loading">Neues Abo</button>
       </div>
     </div>

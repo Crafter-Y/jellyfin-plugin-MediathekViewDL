@@ -10,6 +10,7 @@ using Jellyfin.Plugin.MediathekViewDL.Configuration;
 using Jellyfin.Plugin.MediathekViewDL.Configuration.Groups;
 using Jellyfin.Plugin.MediathekViewDL.Services.Media;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Persistence;
 using MediathekView.Api.External;
 using MediathekView.Api.Models;
 using MediathekView.Api.Models.Enums;
@@ -25,6 +26,7 @@ public sealed class CatalogueSyncService : IDisposable
     private readonly IVideoParser _parser;
     private readonly IHttpClientFactory _clients;
     private readonly ILibraryManager _library;
+    private readonly IItemPersistenceService _persistence;
     private readonly ILogger<CatalogueSyncService> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
@@ -35,7 +37,8 @@ public sealed class CatalogueSyncService : IDisposable
     /// <param name="clients">HTTP client factory.</param>
     /// <param name="library">Jellyfin library manager.</param>
     /// <param name="logger">Structured logger.</param>
-    public CatalogueSyncService(IMediathekViewApiClient api, IConfigurationProvider configuration, IVideoParser parser, IHttpClientFactory clients, ILibraryManager library, ILogger<CatalogueSyncService> logger)
+    /// <param name="persistence">Image database persistence.</param>
+    public CatalogueSyncService(IMediathekViewApiClient api, IConfigurationProvider configuration, IVideoParser parser, IHttpClientFactory clients, ILibraryManager library, ILogger<CatalogueSyncService> logger, IItemPersistenceService persistence)
     {
         _api = api;
         _configuration = configuration;
@@ -43,6 +46,7 @@ public sealed class CatalogueSyncService : IDisposable
         _clients = clients;
         _library = library;
         _logger = logger;
+        _persistence = persistence;
     }
 
     /// <summary>Runs discovery and safe reconciliation, with persisted incremental checkpoints.</summary>
@@ -62,7 +66,7 @@ public sealed class CatalogueSyncService : IDisposable
         {
             var store = new CatalogueStore(options.RootPath, Path.Combine(Plugin.Instance!.DataFolderPath, "catalogue"));
             var now = DateTimeOffset.UtcNow;
-            var repairing = store.State.MetadataPolicyVersion < 2 && store.State.Entries.Count > 0;
+            var repairing = store.State.MetadataPolicyVersion < 3 && store.State.Entries.Count > 0;
             var full = !store.State.LastFullSync.HasValue || now - store.State.LastFullSync.Value >= TimeSpan.FromHours(24);
             var since = full ? (DateTimeOffset?)null : store.State.LastSync?.AddDays(-7);
             var candidates = await DiscoverAsync(repairing ? options with { IncludeSeries = false } : options, repairing ? null : since, cancellationToken, progress).ConfigureAwait(false);
@@ -71,7 +75,7 @@ public sealed class CatalogueSyncService : IDisposable
             var seen = selected.Select(c => c.Key).ToHashSet(StringComparer.Ordinal);
             var written = 0;
             var processed = 0;
-            var metadata = new CatalogueMetadataRepair(_library);
+            var metadata = new CatalogueMetadataRepair(_library, _persistence);
             var repaired = 0;
             foreach (var source in selected)
             {
@@ -82,7 +86,7 @@ public sealed class CatalogueSyncService : IDisposable
                 // the incremental window. Reuse that identity instead of adding a row.
                 if (candidate.DuplicateKey is not null && !store.State.Entries.ContainsKey(candidate.Key))
                 {
-                    var anchor = store.State.Entries.FirstOrDefault(p => p.Value.DuplicateKey == candidate.DuplicateKey
+                    var anchor = store.State.Entries.FirstOrDefault(p => CatalogueSelection.AreEquivalent(p.Value.DuplicateKey, p.Value.SourceDescription, candidate.DuplicateKey, candidate.Source.Description)
                         || (p.Value.Url == url && p.Value.RelativePath.StartsWith("Movies" + Path.DirectorySeparatorChar, StringComparison.Ordinal)));
                     if (anchor.Value is not null)
                     {
@@ -96,7 +100,7 @@ public sealed class CatalogueSyncService : IDisposable
                     written++;
                 }
 
-                if (candidate.UseSourceMetadata && store.State.Entries.TryGetValue(candidate.Key, out var entry) && entry.MetadataGuardVersion < 2)
+                if (candidate.UseSourceMetadata && store.State.Entries.TryGetValue(candidate.Key, out var entry) && entry.MetadataGuardVersion < 3)
                 {
                     var owned = store.GetOwnedPath(candidate.Key);
                     if (owned is not null && await metadata.RepairAsync(candidate, owned, Path.Combine(Plugin.Instance!.DataFolderPath, "catalogue", "metadata-repairs"), cancellationToken).ConfigureAwait(false))
@@ -165,7 +169,7 @@ public sealed class CatalogueSyncService : IDisposable
                 store.State.LastFullSync = now;
             }
 
-            store.State.MetadataPolicyVersion = 2;
+            store.State.MetadataPolicyVersion = 3;
             if (!repairing)
             {
                 store.State.LastSync = now;
@@ -212,23 +216,37 @@ public sealed class CatalogueSyncService : IDisposable
         var completed = 0;
         foreach (var channel in channels)
         {
-            await foreach (var result in pager.GetPagesAsync(
-                new ApiQueryDto
-                {
-                    Queries = [new QueryFieldsDto { Fields = [QueryFieldType.ChannelExact], Query = channel }],
-                    Size = size, MinDuration = options.IncludeSeries ? 599 : 2999, Future = true,
-                },
-                limit,
-                since,
-                cancellationToken).ConfigureAwait(false))
+            var channelStart = candidates.Count;
+            for (var attempt = 0; ; attempt++)
             {
-                foreach (var item in result.Results.Where(i => string.Equals(i.Channel, channel, StringComparison.OrdinalIgnoreCase)))
+                try
                 {
-                    var classified = CataloguePolicy.Classify(item, _parser, options.IncludeSeries);
-                    if (classified is not null)
+                    await foreach (var result in pager.GetPagesAsync(
+                        new ApiQueryDto
+                        {
+                            Queries = [new QueryFieldsDto { Fields = [QueryFieldType.ChannelExact], Query = channel }],
+                            Size = size, MinDuration = options.IncludeSeries ? 599 : 2999, Future = true,
+                        },
+                        limit,
+                        since,
+                        cancellationToken).ConfigureAwait(false))
                     {
-                        candidates.Add(classified);
+                        foreach (var item in result.Results.Where(i => string.Equals(i.Channel, channel, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            var classified = CataloguePolicy.Classify(item, _parser, options.IncludeSeries);
+                            if (classified is not null)
+                            {
+                                candidates.Add(classified);
+                            }
+                        }
                     }
+
+                    break;
+                }
+                catch (IOException ex) when (attempt < 2 && ex.Message == "Upstream catalogue changed during pagination; checkpoint not committed.")
+                {
+                    candidates.RemoveRange(channelStart, candidates.Count - channelStart);
+                    _logger.LogWarning("Catalogue changed while reading {Channel}; retrying its complete traversal ({Attempt}/2)", channel, attempt + 1);
                 }
             }
 

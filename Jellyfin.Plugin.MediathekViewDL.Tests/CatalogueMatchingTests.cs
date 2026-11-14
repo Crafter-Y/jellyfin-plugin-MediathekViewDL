@@ -3,6 +3,7 @@ using Jellyfin.Plugin.MediathekViewDL.Services.Media;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Entities;
 using MediathekView.Api.Models;
 using MediathekView.Api.Models.ResourceItem;
@@ -110,6 +111,25 @@ public class CatalogueMatchingTests : IDisposable
     }
 
     [Fact]
+    public void MovieDuplicates_ShouldAllowSmallPlotWordingChanges_ButKeepDifferentStoriesAndCuts()
+    {
+        // Arrange
+        var first = Candidate("2 für alle Fälle - Ein Song für den Mörder", "Filme im Ersten");
+        first = first with { Source = first.Source with { Description = "Spielfilm Deutschland 2010 Nach vielen Jahren bei der Kripo hängt Kommissar Piet Becker seinen Beruf an den Nagel. Doch als ein Mord die Stadt erschüttert, ermittelt er gemeinsam mit seinem Freund und gerät selbst in Gefahr." } };
+        var second = first with { Key = "other-upload", Source = first.Source with { Id = "other", Description = first.Source.Description.Replace("Kommissar Piet", "Piet"), VideoUrls = [new VideoUrlDto { Url = "https://example.ard.de/another.mp4", Quality = 3 }] } };
+        var different = second with { Key = "different-story", Source = second.Source with { Description = "Spielfilm Deutschland 2010 Eine junge Ärztin kehrt nach langer Zeit in ihre Heimat zurück und übernimmt eine Landarztpraxis. Sie muss sich den Problemen ihrer Patienten stellen und findet unerwartet eine neue Liebe.", VideoUrls = [new VideoUrlDto { Url = "https://example.ard.de/different.mp4", Quality = 3 }] } };
+        var longer = second with { Key = "extended", Source = second.Source with { Duration = TimeSpan.FromMinutes(120), VideoUrls = [new VideoUrlDto { Url = "https://example.ard.de/extended.mp4", Quality = 3 }] } };
+        // Act
+        var prepared = CataloguePolicy.PrepareMovies(new[] { first, second, different, longer }, new HashSet<string>());
+        var selected = CatalogueSelection.Select(prepared, new HashSet<string> { first.Key }, out var duplicates);
+        // Assert
+        Assert.Equal(3, selected.Count);
+        Assert.Contains("other-upload", duplicates);
+        Assert.Contains(selected, c => c.Key == "different-story");
+        Assert.Contains(selected, c => c.Key == "extended");
+    }
+
+    [Fact]
     public void ArchiveDuplicate_ShouldPreserveVideosAndUserEditedMetadata()
     {
         // Arrange
@@ -144,7 +164,11 @@ public class CatalogueMatchingTests : IDisposable
         var candidate = Candidate("Tatort: Avatar", "Tatort");
         var path = Path.Combine(_temp, "Avatar.strm");
         var id = Guid.NewGuid();
-        var wrong = new Movie
+        var internalPath = Path.Combine(_temp, "internal");
+        Directory.CreateDirectory(internalPath);
+        File.WriteAllText(Path.Combine(internalPath, "poster.jpg"), "wrong artwork");
+        File.WriteAllText(Path.Combine(internalPath, "unrelated.txt"), "keep");
+        var wrong = new TestMovie(internalPath)
         {
             Id = id, Path = path, Name = "Avatar", OriginalTitle = "Avatar: The Way of Water",
             ProviderIds = new Dictionary<string, string> { ["Tmdb"] = "76600", ["Imdb"] = "tt1630029" },
@@ -158,8 +182,10 @@ public class CatalogueMatchingTests : IDisposable
         library.SetupGet(l => l.RootFolder).Returns(new AggregateFolder());
         library.Setup(l => l.UpdatePeopleAsync(It.IsAny<BaseItem>(), It.IsAny<IReadOnlyList<PersonInfo>>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         library.Setup(l => l.UpdateItemAsync(It.IsAny<BaseItem>(), It.IsAny<BaseItem>(), It.IsAny<ItemUpdateType>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var persistence = new Mock<IItemPersistenceService>();
+        persistence.Setup(p => p.SaveImagesAsync(wrong, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         // Act
-        var repaired = await new CatalogueMetadataRepair(library.Object).RepairAsync(candidate, path, Path.Combine(_temp, "backup"), CancellationToken.None);
+        var repaired = await new CatalogueMetadataRepair(library.Object, persistence.Object).RepairAsync(candidate, path, Path.Combine(_temp, "backup"), CancellationToken.None);
         // Assert
         Assert.True(repaired);
         Assert.Equal(id, wrong.Id);
@@ -174,6 +200,11 @@ public class CatalogueMatchingTests : IDisposable
         Assert.Equal("19995", other.ProviderIds["Tmdb"]);
         Assert.Contains("76600", File.ReadAllText(Assert.Single(Directory.GetFiles(Path.Combine(_temp, "backup")))));
         library.Verify(l => l.UpdatePeopleAsync(wrong, It.Is<IReadOnlyList<PersonInfo>>(p => p.Count == 0), It.IsAny<CancellationToken>()), Times.Once);
+        persistence.Verify(p => p.SaveImagesAsync(It.Is<BaseItem>(m => m.Id == id && m.ImageInfos.Length == 0), It.IsAny<CancellationToken>()), Times.Once);
+        library.Verify(l => l.UpdateItemAsync(wrong, It.IsAny<BaseItem>(), ItemUpdateType.MetadataEdit | ItemUpdateType.ImageUpdate, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.False(File.Exists(Path.Combine(internalPath, "poster.jpg")));
+        Assert.True(File.Exists(Path.Combine(internalPath, "unrelated.txt")));
+        Assert.Single(Directory.GetFiles(Path.Combine(_temp, "backup"), "*-poster.jpg", SearchOption.AllDirectories));
     }
 
     private CatalogueCandidate Candidate(string title, string topic) => CataloguePolicy.Classify(new ResultItemDto
@@ -182,6 +213,11 @@ public class CatalogueMatchingTests : IDisposable
         Duration = TimeSpan.FromMinutes(90), Timestamp = DateTimeOffset.UtcNow,
         VideoUrls = [new VideoUrlDto { Url = "https://example.ard.de/" + Guid.NewGuid().ToString("N") + ".mp4", Quality = 3 }], SubtitleUrls = [], ExternalIds = [],
     }, _parser, true)!;
+
+    private sealed class TestMovie(string internalPath) : Movie
+    {
+        public override string GetInternalMetadataPath() => internalPath;
+    }
 
     public void Dispose()
     {

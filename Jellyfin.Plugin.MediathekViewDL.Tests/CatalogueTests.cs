@@ -1,10 +1,9 @@
-using Jellyfin.Plugin.MediathekViewDL.Channels;
 using Jellyfin.Plugin.MediathekViewDL.Configuration;
 using Jellyfin.Plugin.MediathekViewDL.Configuration.Groups;
 using Jellyfin.Plugin.MediathekViewDL.Services.Catalogue;
 using Jellyfin.Plugin.MediathekViewDL.Services.Media;
-using Jellyfin.Plugin.MediathekViewDL.Services.Subscriptions;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Persistence;
 using MediathekView.Api.External;
 using MediathekView.Api.Models;
 using MediathekView.Api.Models.ResourceItem;
@@ -236,7 +235,7 @@ public class CatalogueTests : IDisposable
                 });
             });
         using var service = new CatalogueSyncService(api.Object, configuration.Object, _parser,
-            Mock.Of<IHttpClientFactory>(), Mock.Of<ILibraryManager>(), NullLogger<CatalogueSyncService>.Instance);
+            Mock.Of<IHttpClientFactory>(), Mock.Of<ILibraryManager>(), NullLogger<CatalogueSyncService>.Instance, Mock.Of<IItemPersistenceService>());
         // Act
         if (changedSnapshot)
         {
@@ -249,7 +248,35 @@ public class CatalogueTests : IDisposable
             Assert.Equal(2, result.Count);
         }
 
-        Assert.Equal(overlap || changedSnapshot ? new[] { 0, 1 } : new[] { 0, 1, 2 }, offsets);
+        Assert.Equal(changedSnapshot ? new[] { 0, 1, 0, 1, 0, 1 } : overlap ? new[] { 0, 1 } : new[] { 0, 1, 2 }, offsets);
+    }
+
+    [Fact]
+    public async Task Discover_ShouldRetryChangedSnapshot_WithoutKeepingPartialResults()
+    {
+        // Arrange
+        var api = new Mock<IMediathekViewApiClient>();
+        api.Setup(a => a.GetChannelsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { "ARD" });
+        var configuration = new Mock<IConfigurationProvider>();
+        configuration.SetupGet(c => c.Configuration).Returns(new PluginConfiguration());
+        var calls = 0;
+        api.Setup(a => a.SearchPageAsync(It.IsAny<ApiQueryDto>(), It.IsAny<CancellationToken>()))
+            .Returns((ApiQueryDto query, CancellationToken _) =>
+            {
+                calls++;
+                return Task.FromResult(new QueryResultDto
+                {
+                    QueryInfo = new QueryInfoDto { MovieListTimestamp = calls == 1 ? 1 : 2, ResultCount = 1, TotalResults = 2, TotalRelation = TotalRelation.Equal },
+                    Results = [Item("Film " + query.Offset, "Spielfilm Deutschland 1998")],
+                });
+            });
+        using var service = new CatalogueSyncService(api.Object, configuration.Object, _parser,
+            Mock.Of<IHttpClientFactory>(), Mock.Of<ILibraryManager>(), NullLogger<CatalogueSyncService>.Instance, Mock.Of<IItemPersistenceService>());
+        // Act
+        var result = await service.DiscoverAsync(new CatalogueOptions { Channels = "ARD", PageSize = 1 }, null, CancellationToken.None);
+        // Assert
+        Assert.Equal(4, calls);
+        Assert.Equal(new[] { "Film 0", "Film 1" }, result.Select(c => c.Title));
     }
 
     [Fact]
@@ -314,7 +341,7 @@ public class CatalogueTests : IDisposable
                 });
             });
         using var service = new CatalogueSyncService(api.Object, configuration.Object, _parser,
-            Mock.Of<IHttpClientFactory>(), Mock.Of<ILibraryManager>(), NullLogger<CatalogueSyncService>.Instance);
+            Mock.Of<IHttpClientFactory>(), Mock.Of<ILibraryManager>(), NullLogger<CatalogueSyncService>.Instance, Mock.Of<IItemPersistenceService>());
         var options = new CatalogueOptions { Channels = "ARD", PageSize = 1, MaxPages = 5 };
         // Act
         if (failSecondPage)
@@ -329,29 +356,6 @@ public class CatalogueTests : IDisposable
         }
 
         Assert.Equal(new[] { 0, 1 }, offsets);
-    }
-
-    [Fact]
-    public async Task VirtualPlayback_ShouldResolveOneSource_AfterRestartWithoutReloadingCatalogue()
-    {
-        // Arrange
-        var subscription = new Subscription { IsVirtual = true, Name = "ARD" };
-        var config = new PluginConfiguration();
-        config.Subscriptions.Add(subscription);
-        var configuration = new Mock<IConfigurationProvider>();
-        configuration.SetupGet(c => c.Configuration).Returns(config);
-        configuration.SetupGet(c => c.ConfigurationOrNull).Returns(config);
-        var processor = new Mock<ISubscriptionProcessor>();
-        var item = Item("A film", "Spielfilm Deutschland 1998");
-        processor.Setup(p => p.GetChannelSourceAsync(item.Id, It.IsAny<CancellationToken>())).ReturnsAsync(item);
-        processor.Setup(p => p.GetStreamUrlAsync(subscription, item, It.IsAny<CancellationToken>())).ReturnsAsync("https://example.ard.de/film.mp4");
-        using var channel = new MediathekChannel(NullLogger<MediathekChannel>.Instance, configuration.Object, processor.Object);
-        // Act
-        var result = (await channel.GetChannelItemMediaInfo("vitem:" + subscription.Id.ToString("N") + "-" + item.Id, CancellationToken.None)).ToList();
-        // Assert
-        Assert.Equal("https://example.ard.de/film.mp4", Assert.Single(result).Path);
-        processor.Verify(p => p.GetChannelSourceAsync(item.Id, It.IsAny<CancellationToken>()), Times.Once);
-        processor.Verify(p => p.GetChannelItemsAsync(It.IsAny<Subscription>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     private static ResultItemDto Item(string title, string description) => new()

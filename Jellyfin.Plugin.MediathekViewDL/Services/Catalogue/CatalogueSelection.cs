@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using FuzzySharp;
 using MediathekView.Api.External;
 
 namespace Jellyfin.Plugin.MediathekViewDL.Services.Catalogue;
@@ -19,7 +20,18 @@ public static class CatalogueSelection
         var all = items.ToList();
         var exact = all.GroupBy(i => i.Season.HasValue ? "episode:" + i.Key : "url:" + (i.Source.GetVideoByQuality()?.Url ?? i.Key), StringComparer.Ordinal)
             .Select(g => Choose(g, existing)).ToList();
-        var selected = exact.GroupBy(i => i.DuplicateKey ?? i.Key, StringComparer.Ordinal).Select(g => Choose(g, existing)).ToList();
+        var selected = new List<CatalogueCandidate>();
+        foreach (var group in exact.GroupBy(i => BaseIdentity(i.DuplicateKey) ?? i.Key, StringComparer.Ordinal))
+        {
+            var remaining = group.ToList();
+            while (remaining.Count > 0)
+            {
+                var anchor = Choose(remaining, existing);
+                selected.Add(anchor);
+                remaining.RemoveAll(i => i == anchor || AreEquivalent(anchor.DuplicateKey, anchor.Source.Description, i.DuplicateKey, i.Source.Description));
+            }
+        }
+
         // Legacy title-based keys can collide for genuinely distinct productions.
         // Keep any existing files intact and leave such identities unresolved.
         var conflicts = selected.GroupBy(i => i.Key, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
@@ -31,6 +43,25 @@ public static class CatalogueSelection
         duplicates = all.Select(i => i.Key).Where(k => !kept.Contains(k)).ToHashSet(StringComparer.Ordinal);
         return selected;
     }
+
+    /// <summary>Compares plot evidence only for identical normalized title, year, language and cut buckets.</summary>
+    /// <param name="firstKey">First normalized duplicate identity.</param>
+    /// <param name="firstPlot">First full broadcaster description.</param>
+    /// <param name="secondKey">Second normalized duplicate identity.</param>
+    /// <param name="secondPlot">Second full broadcaster description.</param>
+    /// <returns>Whether the two sources confidently describe the same film.</returns>
+    public static bool AreEquivalent(string? firstKey, string firstPlot, string? secondKey, string secondPlot)
+    {
+        if (firstKey is null || secondKey is null || BaseIdentity(firstKey) != BaseIdentity(secondKey))
+        {
+            return false;
+        }
+
+        return firstKey == secondKey || (firstPlot.Length >= 100 && secondPlot.Length >= 100
+            && Fuzz.TokenSetRatio(firstPlot, secondPlot) >= 95 && Fuzz.Ratio(firstPlot, secondPlot) >= 85);
+    }
+
+    private static string? BaseIdentity(string? key) => key is null ? null : string.Join('|', key.Split('|').Take(4));
 
     private static CatalogueCandidate Choose(IEnumerable<CatalogueCandidate> items, ISet<string> existing)
         => items.OrderByDescending(i => i.Source.GetVideoByQuality()?.Quality ?? 0)

@@ -153,6 +153,7 @@ public sealed class CatalogueStore
             entry.SourceId = item.Source.Id;
             entry.SourceTitle = item.Source.Title;
             entry.SourceTopic = item.Source.Topic;
+            entry.SourceDescription = item.Source.Description;
             entry.DuplicateKey = item.DuplicateKey;
             MarkAvailable(item.Key);
             return false;
@@ -167,6 +168,7 @@ public sealed class CatalogueStore
             LastSeen = now, MissingSince = null, MissingChecks = 0,
             MetadataGuardVersion = entry?.MetadataGuardVersion ?? 0,
             SourceId = item.Source.Id, SourceTitle = item.Source.Title, SourceTopic = item.Source.Topic,
+            SourceDescription = item.Source.Description,
             DuplicateKey = item.DuplicateKey,
         };
         AppendMutation(item.Key, State.Entries[item.Key]);
@@ -183,7 +185,7 @@ public sealed class CatalogueStore
     /// <param name="key">Managed identity.</param>
     public void MarkMetadataRepaired(string key)
     {
-        State.Entries[key].MetadataGuardVersion = 2;
+        State.Entries[key].MetadataGuardVersion = 3;
         AppendMutation(key, State.Entries[key]);
     }
 

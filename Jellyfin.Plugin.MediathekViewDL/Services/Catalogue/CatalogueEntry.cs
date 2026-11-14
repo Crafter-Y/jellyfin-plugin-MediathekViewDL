@@ -29,6 +29,9 @@ public sealed class CatalogueEntry
     /// <summary>Gets or sets the original programme topic.</summary>
     public string SourceTopic { get; set; } = string.Empty;
 
+    /// <summary>Gets or sets plot evidence for matching later broadcaster aliases.</summary>
+    public string SourceDescription { get; set; } = string.Empty;
+
     /// <summary>Gets or sets the normalized movie duplicate identity.</summary>
     public string? DuplicateKey { get; set; }
 

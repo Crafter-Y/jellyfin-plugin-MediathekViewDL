@@ -91,9 +91,11 @@ public static class CataloguePolicy
                 return item;
             }
 
-            var contextual = item.UseSourceMetadata || contextualTopics.Contains(item.Topic);
-            var core = StripContext(item.Title, item.Topic);
-            var title = contextual ? item.Topic + ": " + core : item.Title;
+            var topic = contextualTopics.Contains(item.Topic) ? item.Topic
+                : contextualTopics.FirstOrDefault(t => StripContext(item.Title, t) != item.Title) ?? item.Topic;
+            var contextual = item.UseSourceMetadata || contextualTopics.Contains(topic);
+            var core = StripContext(item.Title, topic);
+            var title = contextual ? topic + ": " + core : item.Title;
             var description = NormalizeMovie(item.Source.Description);
             // Matching names alone are insufficient: require matching plot evidence
             // and a comparable cut length, or the exact same video URL below.
