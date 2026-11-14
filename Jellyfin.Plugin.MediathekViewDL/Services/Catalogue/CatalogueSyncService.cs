@@ -66,7 +66,7 @@ public sealed class CatalogueSyncService : IDisposable
         {
             var store = new CatalogueStore(options.RootPath, Path.Combine(Plugin.Instance!.DataFolderPath, "catalogue"));
             var now = DateTimeOffset.UtcNow;
-            var repairing = store.State.MetadataPolicyVersion < 3 && store.State.Entries.Count > 0;
+            var repairing = store.State.MetadataPolicyVersion < 4 && store.State.Entries.Count > 0;
             var full = !store.State.LastFullSync.HasValue || now - store.State.LastFullSync.Value >= TimeSpan.FromHours(24);
             var since = full ? (DateTimeOffset?)null : store.State.LastSync?.AddDays(-7);
             var candidates = await DiscoverAsync(repairing ? options with { IncludeSeries = false } : options, repairing ? null : since, cancellationToken, progress).ConfigureAwait(false);
@@ -169,7 +169,7 @@ public sealed class CatalogueSyncService : IDisposable
                 store.State.LastFullSync = now;
             }
 
-            store.State.MetadataPolicyVersion = 3;
+            store.State.MetadataPolicyVersion = 4;
             if (!repairing)
             {
                 store.State.LastSync = now;

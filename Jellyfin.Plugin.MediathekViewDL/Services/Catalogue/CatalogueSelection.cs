@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using FuzzySharp;
 using MediathekView.Api.External;
 
@@ -57,11 +58,29 @@ public static class CatalogueSelection
             return false;
         }
 
-        return firstKey == secondKey || (firstPlot.Length >= 100 && secondPlot.Length >= 100
-            && Fuzz.TokenSetRatio(firstPlot, secondPlot) >= 95 && Fuzz.Ratio(firstPlot, secondPlot) >= 85);
+        if (firstKey == secondKey || (firstPlot.Length >= 100 && secondPlot.Length >= 100
+            && Fuzz.TokenSetRatio(firstPlot, secondPlot) >= 95 && Fuzz.Ratio(firstPlot, secondPlot) >= 85))
+        {
+            return true;
+        }
+
+        // Broadcasters sometimes supply different plot summaries after an identical
+        // opening sentence. Require substantial shared prose, beyond the production label.
+        var firstLead = PlotLead(firstPlot);
+        var secondLead = PlotLead(secondPlot);
+        return firstLead.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 12
+            && secondLead.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 12
+            && Fuzz.TokenSetRatio(firstLead, secondLead) == 100 && Fuzz.Ratio(firstLead, secondLead) >= 65;
     }
 
     private static string? BaseIdentity(string? key) => key is null ? null : string.Join('|', key.Split('|').Take(4));
+
+    private static string PlotLead(string description)
+    {
+        var prose = Regex.Replace(description, @"^(?:Spielfilm|Fernsehfilm)\s+[^\r\n]*?\b(?:19|20)\d{2}\s*", string.Empty, RegexOptions.IgnoreCase);
+        var lead = Regex.Split(prose, @"[.!?:\r\n]", RegexOptions.None).FirstOrDefault() ?? string.Empty;
+        return Regex.Replace(lead.ToUpperInvariant(), @"[^\p{L}\p{Nd}]+", " ").Trim();
+    }
 
     private static CatalogueCandidate Choose(IEnumerable<CatalogueCandidate> items, ISet<string> existing)
         => items.OrderByDescending(i => i.Source.GetVideoByQuality()?.Quality ?? 0)
